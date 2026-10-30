@@ -3,6 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import vm from "node:vm";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -529,11 +530,21 @@ test("executeBranchIntent: a conflicting branch is refused by name, not landed (
 });
 
 // voicebox-beads-q376 / wmiq — the inspector's buttons answer to the SERVER, never to optimism.
+// The shipped file is a browser module with NO exports (an `export` keyword would break the
+// landed land-status suite, which vm-evals the source as a classic script). The bootstrap is
+// DOM-guarded, so a window-less vm context loads the declarations with no side effects and the
+// top-level function lands on the context global.
+function loadPostBranchAction() {
+  const context = { console };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(new URL("../public/apps/landing-inspector.js", import.meta.url), "utf8"), context);
+  return context.postBranchAction;
+}
 // postBranchAction is the one fetch seam both buttons and the published room tools share; these
 // drives use a fake fetch, so the unit tier covers what used to be a swallowed 404.
 
 test("postBranchAction: a missing route (the old /api/branches/land 404) is a refusal, not a landing (q376)", async () => {
-  const { postBranchAction } = await import("../public/apps/landing-inspector.js");
+  const postBranchAction = loadPostBranchAction();
   const fakeFetch = async () => ({ ok: false, status: 404, json: async () => ({ ok: false, refused: "not-found", why: "no such route" }) });
   const answer = await postBranchAction("/api/branches/land", { branch: "feat/x" }, fakeFetch);
   assert.equal(answer.ok, false);
@@ -542,7 +553,7 @@ test("postBranchAction: a missing route (the old /api/branches/land 404) is a re
 });
 
 test("postBranchAction: an unreachable server is a refusal, not a landing (q376)", async () => {
-  const { postBranchAction } = await import("../public/apps/landing-inspector.js");
+  const postBranchAction = loadPostBranchAction();
   const fakeFetch = async () => { throw new TypeError("fetch failed"); };
   const answer = await postBranchAction("/api/branches/merge", { branch: "feat/x" }, fakeFetch);
   assert.equal(answer.ok, false);
@@ -551,7 +562,7 @@ test("postBranchAction: an unreachable server is a refusal, not a landing (q376)
 });
 
 test("postBranchAction: the server's own refusal is carried through by name (wmiq)", async () => {
-  const { postBranchAction } = await import("../public/apps/landing-inspector.js");
+  const postBranchAction = loadPostBranchAction();
   const fakeFetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: false, refused: "merge-conflict", why: "conflicts with main" }) });
   const answer = await postBranchAction("/api/branches/merge", { branch: "feat/x" }, fakeFetch);
   assert.equal(answer.ok, false);
@@ -559,7 +570,7 @@ test("postBranchAction: the server's own refusal is carried through by name (wmi
 });
 
 test("postBranchAction: only a confirmed ok is a success (wmiq)", async () => {
-  const { postBranchAction } = await import("../public/apps/landing-inspector.js");
+  const postBranchAction = loadPostBranchAction();
   const fakeFetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true, action: "kept-separate", branch: "feat/x" }) });
   const answer = await postBranchAction("/api/branches/keep-separate", { branch: "feat/x" }, fakeFetch);
   assert.equal(answer.ok, true);

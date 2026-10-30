@@ -1,9 +1,10 @@
 // POST a branch action and READ THE ANSWER (voicebox-beads-q376 / wmiq). The honest contract for
 // both buttons and the published room tools: a refusal or an unreachable server returns ok:false
-// with the server's reason; nothing is marked locally until the server confirms. Exported so the
-// unit tier can drive it with a fake fetch — importing this file in Node must have NO DOM side
-// effects (the bootstrap below is guarded).
-export async function postBranchAction(route, body, fetchImpl = globalThis.fetch) {
+// with the server's reason; nothing is marked locally until the server confirms. A plain
+// declaration — NOT an `export` — so the unit tier can also vm-eval the whole file as a classic
+// script (tests/landing-inspector-land-status.test.mjs does exactly that, and `export` would be a
+// SyntaxError there); the bootstrap below is guarded, so a DOM-less load has no side effects.
+async function postBranchAction(route, body, fetchImpl = globalThis.fetch) {
   let res;
   try {
     res = await fetchImpl(route, {
