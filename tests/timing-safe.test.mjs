@@ -205,6 +205,13 @@ test("protocol: host token and in-room session token accept exactly what they ac
     assert.equal(row.refused, "bad-request", `${spelling}: past the wall, the route answers for the missing branch`);
   }
   assert.equal((await mergeGate({ origin: "http://localhost:5174" })).status, 403, "a localhost origin on a NON-dev-front port is not admitted");
+
+  // The WIDENING direction (voicebox-beads-tx13): the block above catches a spelling REMOVED from
+  // the admitted set; these two catch one ADDED. 0.0.0.0 is in no list, and a door keyed on the
+  // port alone (host-insensitive) would admit evil.example on the bound port — both must stay 403,
+  // so enlarging the admitted set is a deliberate test edit, never a silent green.
+  assert.equal((await mergeGate({ origin: `http://0.0.0.0:${selfPort}` })).status, 403, "0.0.0.0 is not an own-page spelling — adding it to the admitted set must turn this RED");
+  assert.equal((await mergeGate({ origin: `http://evil.example:${selfPort}` })).status, 403, "a foreign host on the server's OWN port is not admitted — the door binds host AND port");
 });
 
 // ── 4. the vb_session cookie, driven ───────────────────────────────────────
