@@ -1955,30 +1955,37 @@ async function syncMiniAppAfterFileSave(fileName, content) {
   // file that is ALREADY a shelf mini-app gets its shelf copy refreshed here; anything else stays
   // an ordinary page. When the catalog cannot be read the answer is still NO creation — the
   // failure mode stays "no silent promotion".
-  let listed = catalogMiniApps;
+  // null is membership UNCONFIRMED — never the stale cache (voicebox-beads-z7ks): the cache can
+  // still name an app whose shelf record another client deleted, and answering the membership
+  // question from it re-created that record on the next save. An unreadable catalog must mean
+  // "no creation", exactly as the comment above promises.
+  let listed = null;
   try {
     const res = await fetch("/api/mini-apps?kind=app", { signal: AbortSignal.timeout(6000) });
     if (res.ok) {
       const data = await res.json().catch(() => null);
       if (data && Array.isArray(data.miniApps)) listed = data.miniApps;
     }
-  } catch { /* the cached catalog is enough for the membership question */ }
+  } catch { /* unreachable server: membership stays UNCONFIRMED */ }
   const onShelf = (listed ?? []).some((app) =>
     [app.id, app.appId, app.fileName, app.title]
       .filter((v) => typeof v === "string")
       .some((k) => normalizeMiniAppKey(k) === norm),
   );
-  if (!onShelf) return;
 
-  void fetch("/api/mini-apps", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ fileName: name, title: name, html: content }),
-  }).then((r) => {
-    // A REFUSED SYNC IS NAMED, NOT SWALLOWED (the old .catch(() => {}) is how a 400 hid): the
-    // file itself was already saved — this is the shelf/workspace copy that did not land.
-    if (!r.ok) console.warn(`[mini-app-sync] shelf sync for '${name}' was refused (${r.status}) — the file itself was saved`);
-  }).catch(() => {});
+  // Only CONFIRMED membership earns the sync POST. The local live-copy refresh below is not a
+  // promotion, so it runs either way — a launched app still tracks its edits offline.
+  if (onShelf) {
+    void fetch("/api/mini-apps", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fileName: name, title: name, html: content }),
+    }).then((r) => {
+      // A REFUSED SYNC IS NAMED, NOT SWALLOWED (the old .catch(() => {}) is how a 400 hid): the
+      // file itself was already saved — this is the shelf/workspace copy that did not land.
+      if (!r.ok) console.warn(`[mini-app-sync] shelf sync for '${name}' was refused (${r.status}) — the file itself was saved`);
+    }).catch(() => {});
+  }
   let matchedDesc = null;
   for (const [k, v] of launchedMiniApps.entries()) {
     const vNorm = normalizeMiniAppKey(v.fileName || v.title || k);
