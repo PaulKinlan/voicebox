@@ -82,7 +82,12 @@ export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParall
  */
 export const TIER_FILE_MS = Object.freeze({
   unit: 600_000,
-  server: 300_000,
+  // 600s, not 300s (voicebox-beads-i9k0): tests/tasks-http.test.mjs is one live-HTTP D1 scenario that spawns and
+  // kills environments, and it was killed by this bound at 301.3s on a shared box with no counts reported, having
+  // passed in every earlier run. The per-file bound is the tier's hang detector, and 300s was documenting the box
+  // rather than the file. The ak9h invariant (per-file sits UNDER the tier's stage bound) still holds: 600s < the
+  // 3600s live stage.
+  server: 600_000,
   // 240s WAS A QUIET-BOX BOUND (voicebox-beads-i9k0). On the 2026-10-28 00:14 full gate the box ran
   // 3-5x slower than the 22:25 one (tests/room-delete.test.mjs 50s -> killed, theme-browser 15s -> 47s,
   // mic-hotkey 14s -> 77s at load 6-12), so ordinary files were recorded as timeouts by name and the

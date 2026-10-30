@@ -17,7 +17,10 @@ async function until(check, label) {
 }
 
 for (const provider of ["gemini", "openai"]) {
-  test(`${provider}: discover, approve mid-session, invoke extension, preserve refusals`, { timeout: 20000 }, async () => {
+  test(`${provider}: discover, approve mid-session, invoke extension, preserve refusals`, // 120s, not 20s (voicebox-beads-i9k0): both arms timed out at 20.0s and 20.7s in a live tier the box was
+    // sharing with the rest of the fleet, while the same file finishes in ~4s per arm on a quiet one. The budget is
+    // a hang detector: a provider that never discovers or never approves still fails, by name, at 120s.
+    { timeout: 120000 }, async () => {
     const scratch = mkdtempSync(path.join(os.tmpdir(), "vb-ext-live-"));
     const workspace = path.join(scratch, "workspace");
     mkdirSync(workspace);
