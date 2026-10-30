@@ -23,6 +23,10 @@ test("a FormData body crosses the fetch relay (no DataCloneError; the server ans
 
   const page = await launch();
   t.after(() => page.close());
+  // The wire is the evidence (voicebox-beads-ppsp): a refusal text names the forwarded content-type
+  // HEADER, which a header-only bodyless mutant fakes; the multipart BYTES on the bridge page's real
+  // fetch cannot be faked by dropping the body or emptying the FormData.
+  await page.send("Network.enable");
   await page.goto(`${server.base}/mini-app-bridge.html?appId=formdata-probe`);
   await page.evaluate(() => {
     window.__results = [];
@@ -55,4 +59,13 @@ test("a FormData body crosses the fetch relay (no DataCloneError; the server ans
   assert.match(control, /^HTTP \d+$/u, `the GET control must reach the server (got: ${control})`);
   assert.match(formPost, /^HTTP 415 /u, `the JSON route must refuse the multipart POST by name (got: ${formPost.slice(0, 200)}) — a DataCloneError here is the ctmt defect`);
   assert.match(formPost, /multipart\/form-data/u, `the server must report receiving a multipart body — 'sent no Content-Type' means the relay went out bodyless (got: ${formPost.slice(0, 200)})`);
+
+  // THE WIRE: the bridge page's real fetch must carry the multipart body with the actual field.
+  const posts = page
+    .events("Network.requestWillBeSent")
+    .filter((e) => e.request?.method === "POST" && String(e.request?.url ?? "").includes("/api/mini-apps"));
+  assert.equal(posts.length, 1, "exactly one relayed POST to /api/mini-apps is on the wire");
+  const { postData } = await page.send("Network.getRequestPostData", { requestId: posts[0].requestId });
+  assert.match(postData ?? "", /name="field"/u, "the wire body carries the form field — a header-only or empty-FormData relay cannot produce this");
+  assert.match(postData ?? "", /\r?\n\r?\nvalue\r?\n/u, "the wire body carries the field's VALUE as a multipart part");
 });
