@@ -166,9 +166,28 @@ A refusal names the variable to raise, so the remedy is copy-pasteable. `tests/p
 
 A harness-path signal requires an **edge** that consumes the path — an import/require, a write, a direct,
 variable-bound, or aliased spawn/exec (voicebox-beads-nr56, voicebox-beads-41mb; requiring an argument dependency
-so an unrelated spawn does not promote data fixtures, voicebox-beads-oktn), or a constructed path
-(`path.join`/`fileURLToPath`/`new URL`) — because a test that merely *holds* a harness path as data is not
-driving anything (voicebox-beads-l79v). Matching a quoted path anywhere in the text filed pure unit tests in
+so an unrelated spawn does not promote data fixtures, voicebox-beads-oktn) — because a test that merely *holds* a
+harness path as data is not driving anything (voicebox-beads-l79v).
+
+**Reading a launch target is not launching it** (voicebox-beads-wkdp). A constructed path
+(`path.join`/`path.resolve`/`fileURLToPath`/`new URL`) used to be an edge on its own, so
+`readFileSync(path.join(root, "server.mjs"), "utf8")` — a test that reads the host as TEXT, with no server, no
+browser and no process — was filed live, and `tests/csrf-route-seam.test.mjs` had to assemble its filename
+(`["server", "mjs"].join(".")`) to escape the serial lane. A construction now counts only when the same file
+contains a launch call (`spawn`/`spawnSync`/`exec`/`execSync`/`execFile`/`execFileSync`/`fork`/`createServer`/
+`listen`), read from the file's **code tokens only** — words and punctuation, with comments, strings, templates and
+regexes removed — so a heredoc, a string or a comment that merely mentions `spawn(` cannot promote a fixture. (The
+first draft tested the predicate against the view the classifier handed in, which still carried string contents, so
+`const note = "we should spawn( never)"` was enough to file a pure read in the serial lane: review finding on
+`voicebox-beads-wkdp`, P2, with both the bug and the documented claim wrong. `tests/test-lanes.test.mjs` now pins a
+literal-mentioning fixture, and reverting the predicate turns it red.) An **import** of the fixture helper stays a
+launch signal un-gated — importing `./lib/server.mjs` is how a test gets a server — and so does a **write**: writing a
+harness path stages a helper the test (or the next one) runs. Measured on `main` `187f80eb` when this landed: **7 files** moved from the serial live lane to unit
+(`activity-`, `agents-read-`, `changelog-`, `fleet-get-`, `gemini-media-`, `presence-`, `tool-catalog-route-seam`),
+118 unit / 153 live from 112 / 160, with **no** file moving the other way. (The absolute counts move with the roster;
+the invariant is the seven transitions, which `tests/test-lanes.test.mjs` asserts by name rather than by count.)
+`tests/test-lanes.test.mjs` pins both halves: sources differing only in what they do with the same path (read → unit;
+write, spawn, import → live), and the real roster's route-seam files as unit. Matching a quoted path anywhere in the text filed pure unit tests in
 the serial browser lane and hid them from the unit fast gate; that gap is pinned by a fixture test. The lane
 roster is checked as a complete, disjoint partition rather than pinning global counts that change whenever
 another branch adds a test. Critical boundary files retain explicit membership assertions.
@@ -183,7 +202,7 @@ and `tests/browser-shard-runner.test.mjs`. A fixture that wants a file in a seri
 fixtures really execute the files they write in a disposable repo that has no `lib/`, and an import there fails
 `ERR_MODULE_NOT_FOUND` rather than classifying.
 `scripts/test-lanes.mjs` lexes every `tests/*.test.mjs` file (ignoring comments and fixture string writes) to classify it into the appropriate lane. **The roster is cached across processes (voicebox-beads-idy6)**: lexing 271 files costs 11-20s on a starved VM and every gate process paid it once (`tests/test-changed.test.mjs` paid it ~17x through CLI probes, wedging the unit lane past its budgets). Each cache entry is keyed by `sha256(classifier source + test file source)` — a one-byte edit to one test file invalidates exactly that entry, a classifier edit invalidates all of them, so staleness is impossible by construction. The cache lives in the git **common** dir (`voicebox-lane-classify-v1.json`, shared by every worktree, never dirtying the working tree), is written atomically (tmp + rename), and a corrupt or unreadable cache is ignored and rebuilt rather than failing the gate. It is a cross-process disk cache, not a per-process memo: every call still re-reads every file, so the re-classification assertion in `tests/gate-manifest.test.mjs` keeps its strength. A test may declare its expected lane in a leading line comment, such as `// @lane unit`, `// @lane server`, or `// @lane browser` (before executable code). The declaration does **not** override classifier signals: `node scripts/test-lanes.mjs --check` refuses a mismatch and names the file, declared lane, actual lane and launch signal. A newly added file need not update a shared integer count; its own declaration can pin a critical boundary. The lanes are:
-- **`unit` lane**: Pure logic, state machine, and worker tests (including `tests/wasm-shelf.test.mjs` and `tests/docs-drift.test.mjs`) that do not spawn `server.mjs`, `createServer`, `task-fixture.mjs`, or headless Chromium.
+- **`unit` lane**: Pure logic, state machine, and worker tests (including `tests/wasm-shelf.test.mjs` and `tests/docs-drift.test.mjs`) that do not spawn `server.mjs`, `createServer`, `task-fixture.mjs`, or headless Chromium — and that may still READ `server.mjs` as source text (the source-seam tests), which is not a launch (voicebox-beads-wkdp).
 - **`live` lane**:
   - **Server sub-lane (`--lane server`)**: Spawns `server.mjs` or HTTP servers without launching a browser; runs with `--test-concurrency=4`.
   - **Browser sub-lane (`--lane browser`)**: Launches headless Chromium over CDP. `tools/browser-shard-runner.mjs` takes its queue from the classifier and dispatches up to `TIER_WORKERS.browser` files concurrently (the width has one owner in `scripts/test-shards.mjs`). Each file retains an isolated Node process and ephemeral-port server. For literal default-option `launch()` calls that do not drive native directory drops, a worker keeps one warm browser process while each test file gets its own disposable CDP `BrowserContext` (storage and secondary tabs remain scoped to it). A file requesting custom process flags, a profile, non-default window dimensions, or real directory drag/drop uses a dedicated browser, and the runner tears down its idle warm browser before that file; standalone `node --test` calls are unchanged. The directory-drop exclusion is semantic, not a test skip: a warm off-the-record context can retain a read grant after reload where a standalone Chromium reports `needs-gesture`, so `n20-picked-root.test.mjs` and similar native picked-folder checks must assert the original platform result on a dedicated browser. `tests/browser-shard-runner.test.mjs` drives that picked-folder file through the default runner, requiring all six checks to pass with no warm browser started (about 3s in that browser-lane guard). A failed file poisons that worker's warm browser, which is reaped before the next file. `--cold-browsers` disables reuse for a same-tree A/B measurement or emergency rollback without disabling test coverage. Repeated `--only tests/a.test.mjs --only tests/b.test.mjs --workers 1` runs a focused pair through one worker. The historic four-worker isolated-browser landing measured 284.3s serial → 127.8s on its then-current 63-file roster (249 tests / 247 pass / 0 fail / 2 skipped); these are *historical* numbers, not evidence for the later warm-context change.
