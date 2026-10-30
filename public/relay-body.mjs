@@ -14,8 +14,12 @@
 //   · URLSearchParams             → serialised to its form encoding, plus the form content-type
 //   · Blob / File                 → carried whole (structured clone), byte-capped by `.size`
 //   · ArrayBuffer / ArrayBufferView → carried whole (structured clone), byte-capped by `.byteLength`
-//   · FormData                    → carried whole (structured clone), byte-capped by summing its parts, so the
-//                                   browser still chooses the multipart boundary and content-type
+//   · FormData                    → SERIALISED to an entries envelope for the port (a FormData cannot be
+//                                   structured-cloned across a MessagePort — measured DataCloneError in
+//                                   Chrome, voicebox-beads-ctmt — but strings and Blobs inside it CAN),
+//                                   byte-capped by summing its parts, and rebuilt into a real FormData by
+//                                   the receiving copy of this same function, so the browser still chooses
+//                                   the multipart boundary and content-type
 //   · ReadableStream              → refused: a stream cannot be cloned across the port
 // Every refusal names the body it saw and what to do instead.
 //
@@ -57,12 +61,39 @@ export function relayBody(body, limits) {
   }
   if (tag === "[object FormData]") {
     var total = 0;
-    body.forEach(function (value) {
+    var entries = [];
+    body.forEach(function (value, key) {
+      // FormData values are only ever string or Blob; both structured-clone across the port.
       if (typeof value === "string") total += value.length;
       else if (value && typeof value.size === "number") total += value.size;
+      entries.push([String(key), value]);
     });
     if (total > maxBytes) return { ok: false, error: "a form body of about " + total + " bytes exceeds the relay's " + maxBytes + " byte bound" };
-    return { ok: true, body: body };
+    // The ENVELOPE crosses the port, not the FormData (voicebox-beads-ctmt): postMessage(structured clone)
+    // throws DataCloneError on a FormData in Chrome, so the frame's whole request died AFTER this function
+    // had accepted it. The entries list clones cleanly; the bridge-side copy of this function rebuilds the
+    // real FormData from it below.
+    return { ok: true, body: { voiceboxRelayFormData: entries } };
+  }
+  // The bridge half of the FormData path: an entries envelope ARRIVING from the port is rebuilt into the
+  // real FormData here, so fetch sets the multipart boundary and content-type itself. Only the relay ever
+  // mints this shape (plain-object bodies are refused below), and a frame that hand-writes it gains nothing
+  // it could not send as a real FormData anyway.
+  if (tag === "[object Object]" && body && Array.isArray(body.voiceboxRelayFormData)) {
+    var rebuilt = new FormData();
+    var rebuiltTotal = 0;
+    var parts = body.voiceboxRelayFormData;
+    for (var i = 0; i < parts.length; i++) {
+      var entry = parts[i];
+      if (!entry || entry.length !== 2) return { ok: false, error: "a malformed form envelope cannot be relayed" };
+      var part = entry[1];
+      if (typeof part === "string") rebuiltTotal += part.length;
+      else if (part && typeof part.size === "number") rebuiltTotal += part.size;
+      else return { ok: false, error: "a form envelope entry must be a string or a Blob" };
+      rebuilt.append(String(entry[0]), part);
+    }
+    if (rebuiltTotal > maxBytes) return { ok: false, error: "a form body of about " + rebuiltTotal + " bytes exceeds the relay's " + maxBytes + " byte bound" };
+    return { ok: true, body: rebuilt };
   }
   if (tag === "[object ReadableStream]") {
     return { ok: false, error: "a streaming body cannot cross the relay: read it into a Blob or ArrayBuffer first" };

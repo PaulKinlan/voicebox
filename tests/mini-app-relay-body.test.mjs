@@ -31,14 +31,7 @@ test("URLSearchParams is serialised with the form content-type fetch would have 
   assert.equal(carried.contentType, "application/x-www-form-urlencoded;charset=UTF-8");
 });
 
-test("FormData, Blob, File, ArrayBuffer and views are carried whole rather than dropped", () => {
-  const form = new FormData();
-  form.append("a", "1");
-  form.append("file", new Blob(["hello"]), "hello.txt");
-  const carriedForm = relayBody(form, LIMITS);
-  assert.equal(carriedForm.ok, true);
-  assert.equal(carriedForm.body, form, "the FormData itself travels, so the browser still writes the multipart boundary");
-
+test("Blob, File, ArrayBuffer and views are carried whole rather than dropped", () => {
   const blob = new Blob(['{"kind":"blob"}'], { type: "application/json" });
   assert.deepEqual(relayBody(blob, LIMITS), { ok: true, body: blob });
 
@@ -47,6 +40,37 @@ test("FormData, Blob, File, ArrayBuffer and views are carried whole rather than 
 
   const view = new Uint8Array([1, 2, 3]);
   assert.deepEqual(relayBody(view, LIMITS), { ok: true, body: view });
+});
+
+test("FormData crosses as an entries envelope, never as itself — the port cannot clone it (voicebox-beads-ctmt)", () => {
+  const form = new FormData();
+  form.append("a", "1");
+  form.append("file", new Blob(["hello"]), "hello.txt");
+  const carried = relayBody(form, LIMITS);
+  assert.equal(carried.ok, true);
+  // THE PORT PROPERTY: what crosses must not BE a FormData — Chrome's postMessage throws DataCloneError on
+  // one (rev-v1k6 measured it), so identity-carrying is the defect this test exists to catch.
+  assert.notEqual(Object.prototype.toString.call(carried.body), "[object FormData]", "a FormData must never be handed to postMessage");
+  assert.ok(Array.isArray(carried.body.voiceboxRelayFormData), "what crosses is the entries envelope");
+  assert.equal(carried.contentType, undefined, "no content-type is set: the REBUILT FormData lets fetch choose the multipart boundary");
+});
+
+test("the bridge half rebuilds the envelope into a real FormData (the round trip)", () => {
+  const form = new FormData();
+  form.append("a", "1");
+  form.append("file", new Blob(["hello"]), "hello.txt");
+  const arrived = relayBody(relayBody(form, LIMITS).body, LIMITS);
+  assert.equal(arrived.ok, true);
+  assert.equal(Object.prototype.toString.call(arrived.body), "[object FormData]", "the bridge rebuilds a real FormData for fetch");
+  assert.equal(arrived.body.get("a"), "1");
+  const file = arrived.body.get("file");
+  assert.equal(typeof file.size, "number");
+  assert.equal(file.size, 5);
+
+  // Malformed envelopes are refused, never rebuilt blind.
+  assert.equal(relayBody({ voiceboxRelayFormData: "not-an-array" }, LIMITS).ok, false);
+  assert.equal(relayBody({ voiceboxRelayFormData: [["k"]] }, LIMITS).ok, false);
+  assert.equal(relayBody({ voiceboxRelayFormData: [["k", 42]] }, LIMITS).ok, false, "a non-string non-Blob entry is refused");
 });
 
 test("a body larger than the bound is refused, not truncated", () => {
