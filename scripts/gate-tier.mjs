@@ -45,9 +45,48 @@ import { classify } from "./test-lanes.mjs";
 import { buildQueue, ISOLATED, ISOLATED_FILE_MS, TIER_FILE_MS, TIER_WORKERS } from "./test-shards.mjs";
 import { coverageGaps, emitMarker, tapCounts, tierRecordPath } from "./gate-manifest.mjs";
 import { killRunningChildren, runOneFile, statusOf } from "./test-changed.mjs";
+import { sweepPreviousFixtures, sweepStrays } from "./stray-sweep.mjs";
 import { loadavg1m } from "../lib/host-load.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// THE INSTANT THIS TIER RUN BEGAN (voicebox-beads-9xqs): a fixture older than this is somebody else's, so a sweep scoped
+// to this worktree can never take a server a person started by hand an hour ago.
+const STARTED_AT = Date.now();
+/**
+ * THE PREVIOUS RUN'S RESIDUE (voicebox-beads-qy8m). `scripts/pre-push.sh` runs the live tier through THIS script, not
+ * through `runGate`, and a live tier killed with SIGKILL (an outer `timeout --kill-after`, the reaper) runs no handler
+ * — so its server and browser are reachable only by the next gate-tier run. This sweeps a window that ends at the
+ * instant this run began, using the same helper `runGate` uses, because two runners disagreeing about a previous run's
+ * residue is exactly the gap this closes.
+ */
+function sweepPreviousRun() {
+  try {
+    const { victims, killed } = sweepPreviousFixtures({ root: ROOT, at: STARTED_AT });
+    if (killed.length > 0) {
+      console.error(`[gate-tier] swept ${killed.length} fixture(s) left by an EARLIER run in this worktree: ${victims.map((v) => `${v.pid} (${v.cmdline.slice(0, 60)})`).join(", ")}`);
+    }
+    return killed;
+  } catch (error) {
+    console.error(`[gate-tier] previous-run sweep failed (not fatal): ${error.message}`);
+    return [];
+  }
+}
+
+/** Kill the fixtures this run started in THIS worktree — best effort, and never able to change a verdict. */
+function sweepOwnFixtures() {
+  try {
+    const { victims, killed } = sweepStrays({ root: ROOT, since: STARTED_AT });
+    if (killed.length > 0) {
+      // LOUD ON PURPOSE: a swept fixture means a test file left its server or browser behind, which is exactly the leak
+      // this exists for. Silence here would hide the defect that the sweep is compensating for (voicebox-beads-9xqs).
+      console.error(`[gate-tier] swept ${killed.length} leaked fixture(s) from this worktree: ${victims.map((v) => `${v.pid} (${v.cmdline.slice(0, 60)})`).join(", ")}`);
+    }
+    return killed;
+  } catch (error) {
+    console.error(`[gate-tier] stray sweep failed (not fatal): ${error.message}`);
+    return [];
+  }
+}
 
 /**
  * TIER_WORKERS — the concurrency each tier runs at — lives in `scripts/test-shards.mjs`, which both tier
@@ -320,7 +359,9 @@ async function main() {
   // process that answers SIGTERM by tidying up and then carrying on is a process the outer
   // `timeout --kill-after` has to SIGKILL — and it would keep scanning a lane it has already given up on.
   const stop = (signal) => {
+    console.error(`[gate-tier] ${signal}: killing in-flight files and sweeping this worktree's fixtures before exit`);
     killRunningChildren(signal);
+    sweepOwnFixtures();
     if (browserChild) {
       try {
         browserChild.kill(signal);
@@ -330,7 +371,10 @@ async function main() {
     }
     setTimeout(() => process.exit(128 + (os.constants.signals[signal] ?? 0)), 3000).unref();
   };
-  for (const signal of ["SIGTERM", "SIGINT"]) process.once(signal, () => stop(signal));
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.once(signal, () => stop(signal));
+
+  // Before any tier runs: reap what a killed previous run left, so it cannot outlive its worktree.
+  sweepPreviousRun();
 
   // ── LIVE = the server tier then the browser tier, in that order, which is what `npm run test:live`
   // runs (`node --test server… && node tools/browser-shard-runner.mjs`). The `&&` is load-bearing: a red
@@ -387,6 +431,10 @@ async function main() {
       break;
     }
   }
+
+  // The tiers have finished; anything left is a fixture whose test never stopped it. Swept here rather than with the
+  // process exit so a leak is cleaned by the run that caused it, while its worktree is still ours alone.
+  sweepOwnFixtures();
 
   if (failed.length > 0) {
     const { tier: which, gaps = [], notPassed = [], code } = failed[0];

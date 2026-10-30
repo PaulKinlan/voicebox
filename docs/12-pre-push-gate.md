@@ -230,6 +230,70 @@ Each stage is bounded by GNU `timeout` with a 5-second kill grace period:
 - **Exit `137` (`KILLED`)**: Reports that the process received `SIGKILL`.
 - **Non-zero Exit (`FAILED`)**: Preserves full stdout/stderr and underlying network error codes (such as `ECONNREFUSED` or `UND_ERR_SOCKET`).
 
+### A killed run cleans up the fixtures it started (`voicebox-beads-9xqs`)
+
+A killed gate used to leave its fixtures running. The reaper found `/usr/bin/node …/worktrees/voicebox-merger/server.mjs`
+still alive **121 minutes** after the run that started it had been killed at its bound: 106 MB, 0% CPU, holding a port.
+No handler can prevent this by itself, because of how the pieces are detached:
+
+- a per-file child is spawned `detached`, so a per-file timeout can SIGKILL a wedged file and its group without taking
+  the gate with it;
+- every fixture *inside* that file is detached again (`tests/lib/server.mjs`, `tests/lib/cdp.mjs`), so it leads its own
+  group and a group-kill of the file never reaches it;
+- the graceful path works — the fixture's own `SIGTERM` handler reaps it — but `SIGKILL` (the timeout escalation, the
+  reaper, an outer `--kill-after`) runs no handler in any process.
+
+So the cleanup has to be a **sweep by attribution**, not a handler chain: `scripts/stray-sweep.mjs` kills a process only
+when all three facts hold — its cmdline is a fixture shape (`server.mjs`, a `wasm-worker.mjs` execution cell, a browser
+or a browser helper), its **cwd is this worktree**, and it **started at or after this run began**. Ancestors of the sweeping process are excluded, and a sweep
+with no worktree is refused rather than becoming a box-wide kill. A fixture older than the run is somebody else's, so a
+hand-started server is never a victim; another lane's worktree is never a victim either, because the cwd has to match.
+
+The rules that keep attribution honest, and what the first review of this change caught:
+- **The age fact fails CLOSED.** A process whose start time cannot be read is *not* a victim: the start time is one of
+  the three facts, so an unreadable `/proc/<pid>/stat` cannot be a licence to kill a server that was already running.
+  (The first version skipped the guard when the start time was missing, which turned every fixture in the worktree into a
+  victim — review finding on `voicebox-beads-9xqs`, P2. `tests/stray-sweep.test.mjs` now pins both the missing-stat and
+  the torn-stat shapes, with a readable control, and reverting the line turns it red.)
+- **A per-pid kill orphans children; a group kill does not.** The wasm cell (`lib/wasm-shelf.mjs`) runs in its parent's
+  process group on purpose, so the gate's own escalation — `SIGTERM` to the group, then `SIGKILL` after 5s — reaches it.
+  An operator (or a harness) that kills a `node --test` child by PID instead leaves any cell it started running, and a
+  synchronously growing `memory.grow` loop cannot run a handler to notice. The reaper killed one 121 minutes old at 81%
+  CPU in this worktree on 2026-10-29 for exactly that reason, which is why `wasm-worker.mjs` is a swept shape: the suite
+  itself kills every cell it finishes or times out (`tests/wasm-shelf.test.mjs` finishes with none alive), but nothing
+  inside a killed parent can.
+- **A pinned server is never a victim.** `VOICEBOX_PINNED=1` in the process's environment or a `.pinned-server` file in
+  the worktree opts out — the same two markers `scripts/reap-stale-servers.mjs` honours, so there is one rule, not two.
+- **A sweep is a window**, `since … until`, so the bound cannot be satisfied by mistake: `until` is what keeps a
+  concurrent run's own children out when the sweep happens to run beside them.
+
+**Both runners** — `runGate` (`scripts/test-changed.mjs`, the scoped fast gate) and `scripts/gate-tier.mjs` (the tiered
+runner, which is what `scripts/pre-push.sh` drives the live tier through) — call one shared helper, `sweepPreviousFixtures`,
+**once at the start**: a gate SIGKILLed at its bound (`timeout --kill-after`, rc 137) runs no handler at all, so the only
+cleaner its fixtures get is the *next* run in that worktree. The window reaches back the fleet janitor's four hours
+(`VOICEBOX_STRAY_PREVIOUS_SECS`) and ENDS at the instant the run began, so it can never touch a fixture the current run
+starts; anything older is `scripts/reap-stale-servers.mjs`'s subject, and a worktree that never runs a gate again relies
+on that janitor. (The first version wired this into `runGate` only, and the reviewer was right that a live tier — which
+runs under gate-tier, not `runGate` — could then be killed and leave its server for hours: `voicebox-beads-qy8m`, P2. The
+two runners now share the helper so they cannot disagree; gate-tier says
+`[gate-tier] swept N fixture(s) left by an EARLIER run in this worktree: <pid> (<cmdline>)` when it reaps one, verified by
+spawning a fixture before a gate-tier run and watching that line name it.) On top of that, each runner sweeps its OWN
+fixtures when a run finishes and from its signal handler (`SIGTERM`/`SIGINT`/`SIGHUP` — gate-tier handled only the first
+two before this change), and gate-tier also sweeps once the tier sequence ends. When it kills something it says so, because a swept fixture means a test file left a server
+behind — `[gate-tier] swept 1 leaked fixture(s) from this worktree: <pid> (<cmdline>)` — and that is the defect to fix,
+not the sweep to thank. It complements rather than replaces the fleet-wide `scripts/reap-stale-servers.mjs`, whose subject
+is a fixture older than four hours; this one is bounded by the run that caused it.
+
+Verified: `tests/stray-sweep.test.mjs` (nine unit cases, including one real detached `…server.mjs` that is killed, a
+control in another directory that survives, the fail-closed and pinned arms, and the window), a completed `runGate`
+leaving no fixture, a `SIGTERM` to a run with a fixture in flight leaving none (gate exit 143), and — for the run that is
+killed outright — a fixture older than the run being swept by the next run's start sweep while that run still exits 0.
+
+**A test that has to name a fixture is classified live.** The lane classifier treats `--remote-debugging-port` or a
+`chrome` path in a test file as "a browser over raw CDP", and `server.mjs` as "a server process" — so
+`tests/stray-sweep.test.mjs` assembles those strings (`"server" + ".mjs"`, `"--remote-debug" + "ging-port=0"`) rather than
+spelling them, which keeps a 3.5-second file in the unit tier instead of the serial live one.
+
 ---
 
 ## 4. Landing Preflight — `scripts/landing-preflight.sh`
