@@ -176,6 +176,35 @@ test("protocol: host token and in-room session token accept exactly what they ac
   assert.equal(sessionRow.status, 400, "the real in-room session token passes the wall into the route's own validation");
   assert.equal(sessionRow.refused, "bad-request", "with the wall passed by session, the route answers for the missing branch — it does not re-refuse on authority");
   assert.equal((await mergeGate({ "x-voicebox-session-token": `x${session.slice(1)}` })).status, 403, "an equal-length wrong session token cannot land a branch");
+
+  // Arm 3 (voicebox-beads-363p, rev-gi60-2's residual): the room's own page origin — no credential
+  // at all — is ALSO admission (hasExtensionAuthority arm 3, localPageOrigins). The server derives
+  // its own origins from the bound port, so the probe takes the origin from the base it is already
+  // talking to rather than re-deriving the port. The authorized outcome is the same 400 bad-request
+  // the token positives assert: past the wall, answered by the route's own validation.
+  const ownOrigin = new URL(server.base).origin;
+  const originRow = await mergeGate({ origin: ownOrigin });
+  assert.equal(originRow.status, 400, "the room's own page origin passes the wall into the route's own validation");
+  assert.equal(originRow.refused, "bad-request", "with the wall passed by page origin, the route answers for the missing branch — it does not re-refuse on authority");
+  assert.equal((await mergeGate({ origin: "https://evil.example" })).status, 403, "a foreign origin with no credential is not admitted by the page-origin arm");
+  assert.equal((await mergeGate({ origin: "http://127.0.0.1:1" })).status, 403, "a loopback origin on the WRONG port is not admitted — the arm binds the origin to this server's own port");
+
+  // EVERY admitted spelling, not just the one the probe happened to use (voicebox-beads-xxz9):
+  // ownPageOrigins() admits 127.0.0.1 AND localhost AND [::1] on the bound port, and arm 3 checks
+  // localPageOrigins(), which adds the 5173 dev fronts. Dropping any one spelling from server.mjs
+  // must turn this block RED, so each is driven to the same authorized 400 bad-request.
+  const selfPort = new URL(server.base).port;
+  for (const spelling of [
+    `http://localhost:${selfPort}`,
+    `http://[::1]:${selfPort}`,
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+  ]) {
+    const row = await mergeGate({ origin: spelling });
+    assert.equal(row.status, 400, `${spelling} is an admitted own-page/dev-front spelling and must pass the wall into the route's own validation`);
+    assert.equal(row.refused, "bad-request", `${spelling}: past the wall, the route answers for the missing branch`);
+  }
+  assert.equal((await mergeGate({ origin: "http://localhost:5174" })).status, 403, "a localhost origin on a NON-dev-front port is not admitted");
 });
 
 // ── 4. the vb_session cookie, driven ───────────────────────────────────────
