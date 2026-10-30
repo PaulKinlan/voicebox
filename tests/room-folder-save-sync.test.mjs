@@ -17,8 +17,12 @@
 //     dropping the `if (!r.ok)` warning makes the refusal arm fail;
 //   · NEGATIVE CONTROL for the shape guard: saving a NON-HTML file must not post to the sync API at all, so
 //     "one save = one sync" is a claim about HTML rather than about a counter that fires for everything;
-//   · OPFS ROOM-FOLDER SAVE DRIVE (voicebox-beads-kxts): saving an HTML file inside an adopted OPFS room
-//     folder also posts the leaf name to /api/mini-apps, observing the public/fused.js:2337 call site.
+//   · THE 9lpi CONTRACT: a save is not a promotion. Saving a PLAIN page posts nothing and the file never
+//     appears in the Apps tray (the reviewer found help.html's rule contradicted by every save); only a
+//     file that is ALREADY a shelf mini-app gets its shelf copy refreshed on save. Deleting the shelf
+//     membership gate turns the plain-page arm RED;
+//   · OPFS ROOM-FOLDER SAVE DRIVE (voicebox-beads-kxts): saving a promoted HTML file inside an adopted OPFS
+//     room folder also posts the leaf name to /api/mini-apps, observing the public/fused.js:2337 call site.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -41,7 +45,7 @@ async function until(fn, label, ms = 10000) {
   }
 }
 
-test("the save path posts the LEAF name to the sync API and names a refused sync (voicebox-beads-m4no)", { timeout: 120000 }, async (t) => {
+test("the save path posts the LEAF name to the sync API and names a refused sync (voicebox-beads-m4no)", { timeout: 300000 }, async (t) => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-room-save-sync-"));
   const workspace = path.join(scratch, "project");
   fs.mkdirSync(path.join(workspace, "proposals"), { recursive: true });
@@ -138,14 +142,51 @@ test("the save path posts the LEAF name to the sync API and names a refused sync
     return { before };
   }
 
-  // ── 1. THE SYNC ASKS FOR THE LEAF NAME, AND IT IS THE REQUEST THAT LEFT THE BROWSER ──────────────
-  const beforeFirst = syncPosts().length;
-  assert.equal(beforeFirst, 0, "nothing may sync before a save");
+  // ── 1. A SAVE IS NOT A PROMOTION (voicebox-beads-9lpi): a plain page syncs NOTHING ─────────────
+  // help.html names exactly two ways a page becomes a mini-app, and an editor save is neither. Before
+  // the fix, this save posted a shelf record and the page landed in the Apps tray; the gate now answers
+  // membership first, so nothing may leave the browser and the catalog stays empty of it.
+  const beforePlain = syncPosts().length;
+  assert.equal(beforePlain, 0, "nothing may sync before a save");
   await walkInAndSave("proposals/draft.html", DRAFT_V2);
+
+  await until(
+    async () =>
+      (await page.evaluate(() => fetch("/api/file?name=proposals/draft.html").then((r) => r.json()))).content?.includes("edited in the reader"),
+    "the plain page's own save to land",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(
+    syncPosts().length,
+    beforePlain,
+    "saving a plain HTML page must NOT post to /api/mini-apps — a save is not a promotion (9lpi)",
+  );
+  const plainCatalog = await page.evaluate(() => fetch("/api/mini-apps?kind=app").then((r) => r.json()));
+  assert.equal(
+    (plainCatalog.miniApps ?? plainCatalog.apps ?? []).filter((app) => String(app.fileName ?? app.title ?? "").includes("draft.html")).length,
+    0,
+    `a plain page must not appear in the Apps tray after a save: ${JSON.stringify(plainCatalog).slice(0, 300)}`,
+  );
+
+  // ── 2. PROMOTED FIRST, the save syncs the LEAF name — the m4no pins under the 9lpi gate ─────────
+  // Promotion is the explicit route (what Open as Mini-App posts); only then is a save a sync.
+  const promote = await page.evaluate(() =>
+    fetch("/api/mini-apps", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fileName: "draft.html", title: "draft.html", html: "<!doctype html><p>draft v1</p>" }),
+    }).then((r) => ({ status: r.status })),
+  );
+  assert.equal(promote.status, 200, "the explicit promotion lands the shelf record");
+
+  await page.reload();
+  await page.waitFor(() => document.querySelectorAll("#files .file-open").length >= 2, { label: "the workspace listing before the promoted-save arm" });
+  const beforeFirst = syncPosts().length;
+  await walkInAndSave("proposals/draft.html", "<!doctype html><p>draft v2 — edited in the reader</p>");
 
   const first = await until(
     () => (syncPosts().length > beforeFirst ? syncPosts()[syncPosts().length - 1] : null),
-    "the save to POST to /api/mini-apps",
+    "the save of a SHELF app to POST to /api/mini-apps",
   );
   const sentBody = JSON.parse(first.request.postData);
   assert.equal(sentBody.fileName, "draft.html", "the sync asks for the LEAF name of the file that was saved");
@@ -172,7 +213,7 @@ test("the save path posts the LEAF name to the sync API and names a refused sync
 
   const catalog = await page.evaluate(() => fetch("/api/mini-apps").then((r) => r.json()));
   const drafted = (catalog.miniApps ?? catalog.apps ?? []).filter((app) => String(app.fileName ?? app.title ?? "").includes("draft.html"));
-  assert.equal(drafted.length, 1, `saving the HTML file made it a shelf app under its leaf name: ${JSON.stringify(catalog).slice(0, 300)}`);
+  assert.equal(drafted.length, 1, `the promoted file stays exactly one shelf app under its leaf name after the save: ${JSON.stringify(catalog).slice(0, 300)}`);
   assert.equal(drafted[0].title, "draft.html", "the shelf app is named by the LEAF, which is what the request asked for");
   assert.equal(drafted[0].slug, "draft", "and its slug is derived from that leaf, not from the folder path");
   // ONE app, not two: the m4no defect was the server basename-rewriting the folder-joined path into a second,
@@ -236,15 +277,25 @@ test("the save path posts the LEAF name to the sync API and names a refused sync
     "the refusal is about the shelf copy only: the file inside the folder still holds what was saved",
   );
 
-  // ── 4. THE OPFS ROOM-FOLDER SAVE PATH POSTS THE LEAF NAME (voicebox-beads-kxts) ───────────────
+  // ── 4. THE OPFS ROOM-FOLDER SAVE PATH POSTS THE LEAF NAME FOR A SHELF APP (voicebox-beads-kxts) ──
   // A room folder (OPFS) has its own write path (writeRoomFile) in fused.js. This arm drives that
-  // path for a nested HTML file, proving that saving a file inside an adopted folder also syncs the
-  // leaf name to /api/mini-apps. Deleting the OPFS sync call (public/fused.js:2337) turns this arm RED.
+  // path for a nested HTML file that IS already promoted (9lpi: a plain page's save would post
+  // nothing), proving that saving a shelf app inside an adopted folder syncs the leaf name to
+  // /api/mini-apps. Deleting the OPFS sync call (public/fused.js:2337) turns this arm RED — and so
+  // does deleting the shelf-membership gate after this promotion.
   await page.evaluate(() => {
     if (window.__realFetchForSyncTest) {
       window.fetch = window.__realFetchForSyncTest;
       delete window.__realFetchForSyncTest;
     }
+  });
+  await page.evaluate(async () => {
+    const res = await fetch("/api/mini-apps", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fileName: "widget.html", title: "widget.html", html: "<!doctype html><p>opfs v1</p>" }),
+    });
+    if (!res.ok) throw new Error(`promotion of widget.html refused: ${res.status}`);
   });
 
   await page.evaluate(async () => {
