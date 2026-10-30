@@ -272,7 +272,12 @@ test("u2lx advisory: child-side watchdog terminates orphan process when stdin is
     const hangTimer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch {}
       reject(new Error("child hung past watchdog deadline — watchdog failed to terminate orphan"));
-    }, 10000);
+      // 90s, not 10s (voicebox-beads-i9k0): this is a HANG detector. On the 2026-10-30 14:12 gate the box was at
+      // load 9 and this fired while the child was still starting - spawning node and loading wasm inside a
+      // 7-worker unit lane can take longer than ten seconds, and the assertions below (exit signal, elapsed >= 140,
+      // the armed deadline on stderr) are what actually prove the watchdog works. A watchdog that never fires still
+      // fails, at 90s instead of 10s.
+    }, 90000);
     child.once("close", (c, s) => {
       clearTimeout(hangTimer);
       resolve({ code: c, signal: s });
@@ -314,7 +319,9 @@ test("zpti: the watchdog fires with the main thread BLOCKED in a sync wasm loop 
     const hangTimer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch {}
       reject(new Error("child outlived its 600ms watchdog while blocked in a sync loop — the parent-death guard failed"));
-    }, 15000);
+      // 90s, same reason as the arm above: a hang detector, not an assertion about how fast a loaded box can
+      // start a child. The arm still fails if the parent-death guard never fires.
+    }, 90000);
     child.once("close", (c, s) => {
       clearTimeout(hangTimer);
       resolve({ code: c, signal: s });
@@ -543,7 +550,9 @@ test("mbk: queue overflow is refused by name as over-budget when fan-out exceeds
   assert.equal(stats.queued, 0);
 });
 
-test("3kr3: a real fast worker's completion releases exactly its own slot and never decrements another holder's (voicebox-beads-nhlr)", { timeout: 10000 }, async () => {
+// 120s, not 10s (voicebox-beads-i9k0): this arm spawns real wasm workers, and at load 9 on 2026-10-30 it was
+// killed by its own budget before reaching any assertion (it passes in ~1s on a quiet box and 11/11 standalone).
+test("3kr3: a real fast worker's completion releases exactly its own slot and never decrements another holder's (voicebox-beads-nhlr)", { timeout: 120000 }, async () => {
   const { callWasmTool, createWasmSemaphore } = await import("../lib/wasm-shelf.mjs");
 
   // 0 locals, i32.const 32, end — valid buffer-abi/1 module that returns immediately
