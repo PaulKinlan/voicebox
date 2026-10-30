@@ -57,16 +57,19 @@ test("the workers are the concurrency the gate already ran at, so per-file dispa
   // ONE OWNER (scripts/test-shards.mjs): the fast gate reads this same value, so a scoped run cannot be
   // more serial than the tier it is a strict subset of (voicebox-beads-buy8).
   assert.equal(TIER_WORKERS.unit, Math.max(1, os.availableParallelism() - 1));
-  // LIVE TIERS: server two, browser ONE (voicebox-beads-i9k0). Server was 4. Browser was 3, then 2.
-  // q4j6.1 measured two shards as GREEN but slow (750.1s browser-tier wall) and three as green and fast
-  // (184.2s) on a healthy box that owns its cores. On THIS host two shards still failed across nine
-  // consecutive gates - always a different set of browser files, always passing standalone, with /proc/stat
-  // showing 9% CPU steal and /proc/pressure/cpu some-avg300 17.8 - while unit and server were green in all
-  // nine. One shard is the width this host can conclude at; it costs wall time, which is why pre-push.sh's
-  // live bound moved to 3600s. Do not raise this without a quiet-box measurement on a host that owns its
-  // cores.
+  // LIVE TIERS: server two, browser TWO (voicebox-beads-i9k0). Server was 4. Browser was 3, then 2, then 1, and
+  // back to 2 on 2026-10-30 once the reason for 1 had gone: the tier was dropped to a single shard because files
+  // bounded at 240s were being killed at two shards, and those bounds are now 600s with a recorded single retry for
+  // a wait deadline. Serial cost the tier the whole live stage - two runs were killed at the 5400s bound with 96
+  // browser files still queued while unit was 120/120 and server 60/60 green, files measuring 33-68s each.
+  // HISTORY, so this does not flip again on vibes: q4j6.1 measured two shards GREEN but slow (750.1s browser wall)
+  // and three green and fast (184.2s). Two shards then failed across nine consecutive gates, always a different set
+  // of browser files, always passing standalone, with /proc/stat showing 9% CPU steal - which is why one shard was
+  // tried. One shard then failed to CONCLUDE: two isolated-box runs were killed at the live bound with 96 files
+  // still queued. So the width is 2 with 600s per-file bounds and the recorded single retry, and any future change
+  // needs a quiet-box measurement on a host that owns its cores.
   assert.equal(TIER_WORKERS.server, 2);
-  assert.equal(TIER_WORKERS.browser, 1);
+  assert.equal(TIER_WORKERS.browser, 2);
 });
 
 // ── a file's counts, including the empty run ─────────────────────────────────────────────────────

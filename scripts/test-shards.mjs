@@ -67,7 +67,14 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
 // nothing, which is the state this branch has been stuck in since 2026-10-23.
 // Unit stays at availableParallelism-1: it is green and CPU-bound rather than Chromium-bound.
 // Do not raise these without a quiet-box measurement on a host that owns its cores.
-export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 2, browser: 1 });
+// BROWSER IS TWO AGAIN (voicebox-beads-i9k0, 2026-10-30). It was dropped to one shard on 2026-10-28 to make the
+// tier conclude at all, and that was the right call while a browser file was bounded at 240s: at two shards ordinary
+// files were being killed by their own budget. Those bounds are now 600s per file with a recorded single retry for a
+// wait deadline, and the measurements have moved the other way: on the fully isolated 2026-10-30 07:53 gate the
+// browser tier was still running after ~5000s with files taking 33-68s each, i.e. 96 files serial cannot fit inside
+// the 5400s live stage that also has to hold the 60-file server lane - it was killed twice at that bound with unit
+// 120/120 and server 60/60 green. Two shards halve that wall to ~2200-3200s, which is the same width docs/12 records.
+export const TIER_WORKERS = Object.freeze({ unit: Math.max(1, os.availableParallelism() - 1), server: 2, browser: 2 });
 
 /**
  * Per-file execution budgets per tier (voicebox-beads-ak9h).
