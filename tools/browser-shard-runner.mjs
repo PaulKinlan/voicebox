@@ -348,6 +348,20 @@ async function workerLoop(worker) {
         results.push(result);
         continue;
       }
+      // NOT ON A SATURATED BOX (voicebox-beads-i9k0, 2026-10-30). A wait deadline under load is the host, not a
+      // flake: the retry re-runs the same file on the same starved box and costs another whole file duration. The
+      // 10:15 gate fired EIGHT retries and then died at the live bound anyway, so the retry was buying wall time
+      // from a run that had none. Above one runnable per cpu the honest record is "not retried, host saturated".
+      const saturatedOn = loadavg1m();
+      const cpus = os.cpus().length;
+      if (saturatedOn > cpus) {
+        console.log(`[shards] NO-RETRY ${file} — ${flake.arm}: ${flake.why}, but the box was saturated (loadavg 1m ${saturatedOn.toFixed(2)} on ${cpus} cpu(s)), so a retry would spend another ${Math.round(result.ms)}ms to hit the same host and the first attempt stands as the record`);
+        results.push({
+          ...result,
+          retry: { attempts: 0, reason: "skipped-saturated-host", loadavg_1m: saturatedOn, cpus, arm: flake.arm, why: flake.why, arms: flake.arms },
+        });
+        continue;
+      }
       retried.add(file);
       console.log(`[shards] RETRY ${file} — the only failure was an environmental wait deadline (${flake.arm}: ${flake.why}); first attempt ${result.pass}/${result.tests} in ${Math.round(result.ms)}ms, retrying once on a fresh browser, and both attempts go in the tier record`);
       const again = await runFile(file, null, false);
