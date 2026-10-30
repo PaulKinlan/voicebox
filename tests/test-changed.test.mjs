@@ -22,15 +22,38 @@ const CLI_PROBE_BOUND_MS = 60_000;
 // that work is the gate's, not a CLI answer's, and the tier's own per-file timeout is what bounds it there.
 const GATE_PROBE_BOUND_MS = 300_000;
 
-/** A bound that fired is a slow host, not a behaviour; say which one it was. */
-function assertProbeTerminated(result, what) {
+/**
+ * A bound that fired is a slow host, not a behaviour; say which one it was — the one the probe actually ran
+ * under (voicebox-beads-03w5). This used to name `CLI_PROBE_BOUND_MS` unconditionally, so the gate-mode probe,
+ * which runs with the much larger `GATE_PROBE_BOUND_MS`, reported a timeout "against a 60000ms bound" when the
+ * bound that killed it was 300000ms — a diagnostic that sends the reader to the wrong number.
+ */
+function assertProbeTerminated(result, what, boundMs = CLI_PROBE_BOUND_MS) {
   const ran = typeof result.elapsedMs === "number" ? ` after ${result.elapsedMs}ms` : "";
   assert.equal(
     result.error,
     undefined,
-    `${what} must terminate normally: it ${result.error ? `ended with ${result.error.code ?? result.error.message}${ran} against a ${CLI_PROBE_BOUND_MS}ms bound — that is the HOST, not the CLI` : "returned"}`,
+    `${what} must terminate normally: it ${result.error ? `ended with ${result.error.code ?? result.error.message}${ran} against a ${boundMs}ms bound — that is the HOST, not the CLI` : "returned"}`,
   );
 }
+
+// The message is a diagnostic, so it is worth asserting rather than trusting: the default names the CLI bound and
+// an explicit bound names itself. Without the parameter above the second case reports 60000 and this fails.
+test("the probe bound a timeout is reported against is the bound the probe ran under (voicebox-beads-03w5)", () => {
+  const timedOut = { error: { code: "ETIMEDOUT" }, elapsedMs: 60_100 };
+  assert.throws(
+    () => assertProbeTerminated(timedOut, "a CLI probe"),
+    /against a 60000ms bound/,
+    "the CLI probe's default bound is 60s",
+  );
+  assert.throws(
+    () => assertProbeTerminated(timedOut, "the gate-mode CLI probe", GATE_PROBE_BOUND_MS),
+    /against a 300000ms bound/,
+    "the gate probe must name ITS bound, not the CLI's",
+  );
+  // A probe that terminated is not this helper's business; it must not throw.
+  assertProbeTerminated({ error: undefined }, "a probe that finished");
+});
 
 // Fail-closed CLI probes run under a disposable no-child-process preload. Even the old broken
 // parser cannot launch a test gate: a Git/test spawn records a marker and throws before launch.
@@ -525,7 +548,7 @@ test("CLI gate: a genuine changed test file dispatches, emits the hub's markers 
   const dir = mkdtempSync(path.join(os.tmpdir(), "voicebox-gate-cli-"));
   try {
     const res = spawnSync(process.execPath, [SCRIPT, "--gate", "--manifest-dir", dir, "tests/icon-sprite.test.mjs"], { cwd: root, encoding: "utf8", timeout: GATE_PROBE_BOUND_MS });
-    assertProbeTerminated(res, "the gate-mode CLI probe");
+    assertProbeTerminated(res, "the gate-mode CLI probe", GATE_PROBE_BOUND_MS);
     assert.equal(res.status, 0, res.stdout + res.stderr);
     assert.match(res.stdout, /^\[test:changed\] running tests\/icon-sprite\.test\.mjs$/m);
     assert.match(res.stdout, /^fast-gate: passed: tests\/icon-sprite\.test\.mjs$/m);
