@@ -23,6 +23,7 @@ import { createAgentsReadRoutes } from "./lib/routes/agents-read.mjs";
 import { createFleetRoutes } from "./lib/routes/fleet.mjs";
 import { createChangelogRoutes } from "./lib/routes/changelog.mjs";
 import { createBranchRoutes } from "./lib/routes/branches.mjs";
+import { executeBranchIntent } from "./lib/branch-landing.mjs";
 import { createDoctorRoutes } from "./lib/routes/doctor.mjs";
 import { createHarnessRoutes } from "./lib/routes/harnesses.mjs";
 import { createToolCatalogRoutes } from "./lib/routes/tool-catalog.mjs";
@@ -2602,6 +2603,33 @@ async function execute(action) {
       type: "system_command",
       ...systemCommand,
     });
+    // land_branch / keep_branch_separate EXECUTE here, against the workspace git (voicebox-beads-xo5d):
+    // the voice promise ended at an empty page handler (async () => ({ ok: true })) and the user heard
+    // "Ran land_branch." while nothing happened. The server owns the candidate list and the merge, so
+    // the act and its TRUE outcome are decided here — the say IS the result, including "there are none"
+    // and "choose one" when several wait. The page handler now only opens the inspector so the answer
+    // is visible.
+    if (action.command === "land_branch" || action.command === "keep_branch_separate") {
+      const intentRoot = active?.root?.kind === "machine" ? active.root.path : ROOT;
+      const outcome = executeBranchIntent(intentRoot, action.command === "land_branch" ? "land" : "keep-separate", { baseBranch: "main", decisionsFile: path.join(WORKSPACE, "branch-decisions.json") });
+      recordWorkActivity({
+        kind: outcome.ok ? "system" : "error",
+        summary: `system: ${action.command} — ${outcome.say ?? outcome.why ?? outcome.outcome}`,
+        detail: outcome.branch ?? (outcome.branches ?? []).join(", "),
+        file: "",
+        status: outcome.ok ? "ok" : "error",
+      });
+      return {
+        ok: outcome.ok,
+        refused: outcome.refused,
+        why: outcome.why,
+        action: outcome.say,
+        say: outcome.say,
+        branchIntent: outcome,
+        systemCommand,
+        root: active?.root ?? null,
+      };
+    }
     if (action.command === "clear_activity") {
       workActivityLog.length = 0;
     } else {
@@ -3811,6 +3839,9 @@ const branchRoutes = createBranchRoutes({
   readJsonBody,
   answerOnce,
   hasExtensionAuthority,
+  // Branch decisions persist beside the rest of the workspace state (voicebox-beads-wmiq) — a
+  // refreshed inspector must still show a "kept separate" the operator was told was recorded.
+  decisionsFile: path.join(WORKSPACE, "branch-decisions.json"),
 });
 const doctorRoutes = createDoctorRoutes({
   getActive: () => active,
@@ -4292,8 +4323,13 @@ async function handle(req, res) {
       try {
         if (statSync(file).isFile()) {
           const type = MIME_TYPES[path.extname(file)] ?? "application/octet-stream";
+          // Mini-app scripts load inside the bridge's sandboxed frame, whose origin is OPAQUE —
+          // and a module script's fetch is CORS-mode, so without this header the frame can never
+          // load its own code and the app dies silently (voicebox-beads-v1k6). The bytes are
+          // public and uncredentialed; `*` is the honest answer for them and nothing else.
+          const isMiniAppScript = containedIn(path.join(PUBLIC, "apps"), file) && file.endsWith(".js");
           // Keyed on the RESOLVED FILE (`file`), not on the requested path: see the allowlist above for why.
-          res.writeHead(200, { "content-type": type, ...cspReportOnlyHeaders(file) });
+          res.writeHead(200, { "content-type": type, ...(isMiniAppScript ? { "access-control-allow-origin": "*" } : {}), ...cspReportOnlyHeaders(file) });
           return res.end(readFileSync(file));
         }
       } catch {}

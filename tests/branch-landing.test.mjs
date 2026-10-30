@@ -3,6 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import vm from "node:vm";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ import {
   inspectBranchDiff,
   landCandidateBranch,
   keepBranchSeparate,
+  executeBranchIntent,
 } from "../lib/branch-landing.mjs";
 import { createBranchRoutes } from "../lib/routes/branches.mjs";
 import {
@@ -177,14 +179,27 @@ test("branch-landing: listCandidateBranches, inspectBranchDiff, keepBranchSepara
     deletions: 0,
   });
 
-  // 4. Keep branch separate (non-destructive)
+  // 4. Keep branch separate (non-destructive) — RECORDED on disk since wmiq: a decision the
+  // operator was told was recorded must survive a refresh, so the call takes the ledger file.
+  const decisionsFile = path.join(repoDir, ".voicebox-test-decisions.json");
   const kept = keepBranchSeparate(repoDir, "feat/agent-patch", {
     note: "Hold until acceptance review",
+    decisionsFile,
   });
   assert.equal(kept.ok, true);
   assert.equal(kept.action, "kept-separate");
   assert.equal(kept.branch, "feat/agent-patch");
   assert.equal(fs.existsSync(path.join(repoDir, "notes.txt")), false);
+
+  // The decision rides the next listing — this is what a refreshed inspector reads.
+  const relisted = listCandidateBranches(repoDir, { baseBranch: "main", decisionsFile });
+  assert.equal(relisted.branches[0].statusDecision, "kept-separate");
+  assert.equal(relisted.branches[0].decisionNote, "Hold until acceptance review");
+
+  // Without a ledger the call refuses rather than pretend to have recorded.
+  const unrecorded = keepBranchSeparate(repoDir, "feat/agent-patch", { note: "x" });
+  assert.equal(unrecorded.ok, false);
+  assert.equal(unrecorded.refused, "no-decisions-store");
 
   // 5. Land candidate branch into main
   const landed = landCandidateBranch(repoDir, "feat/agent-patch", { baseBranch: "main" });
@@ -237,7 +252,7 @@ test("branch-landing: exports valid Standards-Mode mini-app HTML and passes plai
   assert.match(html, /id="diff-viewer"/);
   assert.match(html, /id="land-branch-btn"/);
   assert.match(html, /id="keep-separate-btn"/);
-  assert.match(html, /<script\s+src="\/apps\/landing-inspector\.js"><\/script>/);
+  assert.match(html, /<script\s+type="module"\s+src="\/apps\/landing-inspector\.js"><\/script>/);
 
   const js = fs.readFileSync(
     new URL("../public/apps/landing-inspector.js", import.meta.url),
@@ -323,6 +338,7 @@ test("branch-landing: createBranchRoutes provides candidate inspection and landi
     // authority contract is pinned in tests/branches-route.test.mjs and the real protocol gate in
     // tests/timing-safe.test.mjs. The permissive stub lets the merge step reach the lander here.
     hasExtensionAuthority: () => true,
+    decisionsFile: path.join(repoDir, ".voicebox-test-decisions.json"),
   });
 
   assert.ok(routes["GET /api/branches/candidates"]);

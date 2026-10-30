@@ -4,7 +4,12 @@
 //   - Hosted on same origin as Voicebox (http://127.0.0.1:8787).
 //   - Communicates with Host Room strictly verifying event.origin === window.location.origin.
 //   - Embeds the untrusted app inside an inner iframe strictly configured with sandbox="allow-scripts" (opaque origin).
+//   - The fetch relay's gate is public/relay-target.mjs: a target is admitted only when it RESOLVES to this page's
+//     origin (voicebox-beads-zus7), never by a string prefix.
 //   - Mediates tool declarations, capability limits (64KB max, 5s timeout), and Web MCP execution over MessagePort.
+
+import { relayTarget } from "./relay-target.mjs";
+import { relayBody } from "./relay-body.mjs";
 
 const inner = document.getElementById("inner-app");
 let currentAppId = null;
@@ -30,6 +35,9 @@ const BOUNDS = {
   maxSchemaDepth: 16,
   maxSchemaNodes: 512,
   callTimeoutMs: 5000,
+  // The fetch relay (voicebox-beads-v1k6): buffered whole, bounded, same-origin paths only.
+  fetchRelayTimeoutMs: 30000,
+  fetchRelayMaxBodyBytes: 262144,
 };
 
 const INJECTED_SDK = `<script>
@@ -65,6 +73,76 @@ const INJECTED_SDK = `<script>
   let bridgePort = null;
   const pendingMessages = [];
 
+  // FETCH RELAY (voicebox-beads-v1k6): this frame is sandboxed WITHOUT allow-same-origin, so its
+  // origin is opaque and fetch("/api/...") can never reach the server — a mini-app that renders
+  // fetched state then silently shows its placeholder data instead (the landing inspector showed
+  // fabricated branches over 23 real ones). Same-origin requests are relayed over the bridge port to
+  // the same-origin bridge page and resolved as real Response objects; foreign ones keep native fetch,
+  // which is CORS-bound. Buffered whole — no streaming.
+  var nativeFetch = typeof window.fetch === "function" ? window.fetch.bind(window) : null;
+  var fetchSeq = 0;
+  var pendingFetches = new Map();
+  var FETCH_RELAY_TIMEOUT_MS = 30000;
+  // The relay gate, embedded from the bridge's own module (public/relay-target.mjs) so the two realms cannot
+  // drift. Resolved against a fixed placeholder origin, because THIS frame's origin is opaque ("null") and
+  // cannot be the base; it only decides whether to ask the relay at all. The bridge re-checks against its REAL
+  // origin, and that check is the boundary (voicebox-beads-zus7).
+  var RELAY_BASE = "http://mini-app.invalid";
+  var relayTarget = (${String(relayTarget)});
+  // The body policy, embedded from the same module the bridge imports (voicebox-beads-182c): a body that is not
+  // a string is carried (URLSearchParams, FormData, Blob, ArrayBuffer) or REFUSED OUT LOUD — never dropped into
+  // a bodyless request the app did not ask for.
+  var RELAY_BODY_LIMIT = ${BOUNDS.maxArgsBytes};
+  var relayBody = (${String(relayBody)});
+  window.fetch = function(input, init) {
+    var url = typeof input === "string" ? input : (input && input.url) || "";
+    // A Request carries its own method, headers and body, and its .url is always ABSOLUTE — so the old relay
+    // path could only ever have sent it as a GET with no body, i.e. a different request than the app wrote.
+    // Fetching it natively is not a fix either (an opaque-origin frame is CORS-blocked, so it fails with a bare
+    // "Failed to fetch"). Name the supported spelling instead (voicebox-beads-182c).
+    if (typeof Request === "function" && input instanceof Request) {
+      return Promise.reject(new Error("fetch relay: pass a URL string and an init object (fetch('/api/x', { method, body })) — a Request object cannot be relayed without changing the request"));
+    }
+    var target = relayTarget(url, RELAY_BASE);
+    if (!target) {
+      if (!nativeFetch) return Promise.reject(new Error("fetch is unavailable in this frame"));
+      return nativeFetch(input, init);
+    }
+    var method = String((init && init.method) || "GET").toUpperCase();
+    var carried = relayBody(init && init.body, { maxBytes: RELAY_BODY_LIMIT });
+    if (!carried.ok) {
+      return Promise.reject(new Error("fetch relay refuses this request: " + carried.error));
+    }
+    var headers = (init && init.headers) || {};
+    // The form content-type comes from the BODY (URLSearchParams), and only overwrites a plain header bag — a
+    // Headers instance is passed through untouched, because spreading it would lose its own semantics.
+    var headerTag = Object.prototype.toString.call(headers);
+    if (carried.contentType && (headerTag === "[object Object]" || headerTag === "[object Array]")) {
+      var named = Object.keys(headers).some(function (name) { return String(name).toLowerCase() === "content-type"; });
+      if (!named) {
+        headers = Object.assign({}, headers);
+        headers["content-type"] = carried.contentType;
+      }
+    }
+    return new Promise(function(resolve, reject) {
+      var callId = "fetch-" + (++fetchSeq);
+      var timer = setTimeout(function() {
+        if (pendingFetches.delete(callId)) reject(new Error("fetch relay timed out after " + FETCH_RELAY_TIMEOUT_MS + "ms"));
+      }, FETCH_RELAY_TIMEOUT_MS);
+      pendingFetches.set(callId, { resolve: resolve, reject: reject, timer: timer });
+      postToBridge({
+        type: "fetch_request",
+        callId: callId,
+        // The RESOLVED path, so no ambiguity crosses the port: the bridge resolves this string again against
+        // its real origin, and a normalized same-origin path can only come back same-origin.
+        url: target.pathname + target.search + target.hash,
+        method: method,
+        headers: headers,
+        body: carried.body
+      });
+    });
+  };
+
   function postToBridge(msg) {
     if (bridgePort) bridgePort.postMessage(msg);
     else pendingMessages.push(msg);
@@ -78,6 +156,23 @@ const INJECTED_SDK = `<script>
       bridgePort.onmessage = async function(e) {
         const data = e.data;
         if (!data) return;
+
+        if (data.type === "fetch_result") {
+          const pending = pendingFetches.get(data.callId);
+          if (pending) {
+            pendingFetches.delete(data.callId);
+            clearTimeout(pending.timer);
+            if (data.ok) {
+              pending.resolve(new Response(data.bodyText, {
+                status: data.status,
+                headers: data.headers || {}
+              }));
+            } else {
+              pending.reject(new TypeError(data.error || "fetch relay failed"));
+            }
+          }
+          return;
+        }
 
         if (data.type === "call_tool") {
           const callId = data.callId;
@@ -832,9 +927,75 @@ function validateToolArgs(params, rawArgs) {
 }
 }
 
+// FETCH RELAY, bridge half (voicebox-beads-v1k6): the sandboxed inner frame has an opaque origin
+// and cannot fetch the server's own API; this page is same-origin, so it fetches for it. Only
+// absolute-path same-origin URLs, a small method allowlist, and a content-type-only header pass —
+// the sandboxed app must not be able to mint Cookie/Authorization headers through the relay; the
+// page's own same-origin credentials ride the request as they would for the room itself. The body
+// is buffered whole and capped.
+async function handleFetchRelay(data) {
+  const { callId } = data;
+  const reply = (msg) => {
+    try {
+      appChannel.port1.postMessage({ type: "fetch_result", callId, ...msg });
+    } catch {}
+  };
+  const url = typeof data.url === "string" ? data.url : "";
+  // THE GATE (voicebox-beads-zus7): the target must RESOLVE to this page's origin. A prefix test admitted
+  // "/\\t//host:port/leak" — one leading slash, a stripped control char — and this fetch reached a foreign
+  // origin on the bridge's behalf, which is exactly the egress the sandbox exists to prevent.
+  const target = relayTarget(url, window.location.origin);
+  if (!target) {
+    reply({ ok: false, error: "the fetch relay serves same-origin paths only" });
+    return;
+  }
+  const method = String(data.method || "GET").toUpperCase();
+  if (!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"].includes(method)) {
+    reply({ ok: false, error: `method not relayable: ${method}` });
+    return;
+  }
+  const headers = {};
+  const wantedContentType = data.headers && typeof data.headers === "object" ? (data.headers["content-type"] || data.headers["Content-Type"]) : null;
+  if (typeof wantedContentType === "string") headers["content-type"] = wantedContentType.slice(0, 200);
+  // The body policy again, at the TRUST boundary: the frame's own copy bounded it there, and this copy bounds
+  // what actually arrives. A body this side cannot carry is refused out loud rather than sent empty
+  // (voicebox-beads-182c).
+  const carried = method === "GET" || method === "HEAD" ? { ok: true } : relayBody(data.body, { maxBytes: BOUNDS.maxArgsBytes });
+  if (!carried.ok) {
+    reply({ ok: false, error: `fetch relay refuses this request: ${carried.error}` });
+    return;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BOUNDS.fetchRelayTimeoutMs);
+  try {
+    const res = await fetch(target.href, {
+      method,
+      headers,
+      body: carried.body,
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    reply({
+      ok: true,
+      status: res.status,
+      headers: { "content-type": res.headers.get("content-type") || "text/plain" },
+      bodyText: text.length > BOUNDS.fetchRelayMaxBodyBytes ? text.slice(0, BOUNDS.fetchRelayMaxBodyBytes) : text,
+    });
+  } catch (err) {
+    reply({ ok: false, error: `fetch relay failed: ${err?.message ?? String(err)}` });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function handleInnerMessage(event) {
   const data = event.data;
   if (!data) return;
+
+  if (data.type === "fetch_request") {
+    handleFetchRelay(data);
+    return;
+  }
 
   if (data.type === "register_tool") {
     if (registeredTools.size >= BOUNDS.maxTools) {

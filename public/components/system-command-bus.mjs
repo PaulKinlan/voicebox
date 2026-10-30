@@ -316,12 +316,29 @@ export function registerCoreSystemCommands(bus = defaultBus, options = {}) {
     description: "Opens candidate branch landing inspector",
   });
 
-  bus.registerSystemCommand("land_branch", async () => ({ ok: true, action: "land_branch" }), {
+  // land_branch / keep_branch_separate EXECUTE ON THE SERVER before this broadcast arrives
+  // (voicebox-beads-xo5d): the turn's resolver runs the act against the workspace git and the say
+  // IS the outcome. The page's part is the visible half — open the inspector so the refreshed
+  // candidate list shows what happened (and, when the voice act answered "ambiguous", so the user
+  // can choose). These handlers used to be empty async () => ({ ok: true }) — a no-op that reported
+  // success.
+  const openInspectorForOutcome = (context = {}) => {
+    const fn = context.openBranchLandingInspector || options.openBranchLandingInspector || (() => {});
+    void fn();
+  };
+
+  bus.registerSystemCommand("land_branch", async (_cmd, context = {}) => {
+    openInspectorForOutcome(context);
+    return { ok: true, action: "land_branch" };
+  }, {
     category: "branch_landing",
     description: "Lands selected candidate branch",
   });
 
-  bus.registerSystemCommand("keep_branch_separate", async () => ({ ok: true, action: "keep_branch_separate" }), {
+  bus.registerSystemCommand("keep_branch_separate", async (_cmd, context = {}) => {
+    openInspectorForOutcome(context);
+    return { ok: true, action: "keep_branch_separate" };
+  }, {
     category: "branch_landing",
     description: "Marks candidate branch to stay separate",
   });

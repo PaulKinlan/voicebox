@@ -1,4 +1,39 @@
-(function () {
+// POST a branch action and READ THE ANSWER (voicebox-beads-q376 / wmiq). The honest contract for
+// both buttons and the published room tools: a refusal or an unreachable server returns ok:false
+// with the server's reason; nothing is marked locally until the server confirms. A plain
+// declaration — NOT an `export` — so the unit tier can also vm-eval the whole file as a classic
+// script (tests/landing-inspector-land-status.test.mjs does exactly that, and `export` would be a
+// SyntaxError there); the bootstrap below is guarded, so a DOM-less load has no side effects.
+async function postBranchAction(route, body, fetchImpl = globalThis.fetch) {
+  let res;
+  try {
+    res = await fetchImpl(route, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    return { ok: false, refused: "server-unreachable", why: `the server could not be reached — nothing was recorded (${err?.message ?? err})` };
+  }
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok || !data || data.ok === false) {
+    return {
+      ok: false,
+      refused: data?.refused ?? `http-${res.status}`,
+      why: data?.why ?? `the server answered ${res.status} — nothing was recorded`,
+    };
+  }
+  return { ok: true, data };
+}
+
+// The inspector's bootstrap touches window/document at module scope, so it runs ONLY in a browser;
+// the unit tier imports the helpers above without one.
+if (typeof window !== "undefined" && typeof document !== "undefined") (function () {
   const codec = window["JS" + "ON"];
   const mimeType = ["application", "js" + "on"].join("/");
 
@@ -125,6 +160,17 @@
         " behind · " +
         (branch.filesChanged ?? (branch.files ? branch.files.length : 0)) +
         " files";
+
+      // The recorded decision is rendered, not just held (wmiq): a kept-separate branch says so
+      // on its row, so a refresh cannot silently turn "recorded" back into "waiting".
+      if (branch.statusDecision && branch.statusDecision !== "waiting") {
+        const decision = document.createElement("div");
+        decision.className = "branch-decision";
+        decision.dataset.decision = branch.statusDecision;
+        decision.textContent =
+          branch.statusDecision === "kept-separate" ? "Kept separate" : "Landed";
+        meta.appendChild(decision);
+      }
 
       btn.append(top, subj, meta);
       btn.addEventListener("click", () => {
@@ -278,11 +324,18 @@
       const res = await fetch("/api/branches/candidates");
       if (res && res.ok) {
         const data = codec.parse(await res.text());
-        if (data && Array.isArray(data.branches) && data.branches.length) {
+        // A reachable server's answer is the truth even when it is EMPTY (wmiq): the old
+        // `branches.length` guard kept the built-in preview branches on screen, so the inspector
+        // showed made-up branches over a real, empty workspace. Fixtures survive only when the
+        // server cannot be reached at all.
+        if (data && Array.isArray(data.branches)) {
           state.baseBranch = data.baseBranch || "main";
           state.branches = data.branches;
-          if (!state.branches.some((b) => b.name === state.selectedBranch)) {
+          if (state.branches.length && !state.branches.some((b) => b.name === state.selectedBranch)) {
             state.selectedBranch = state.branches[0].name;
+          }
+          if (!state.branches.length) {
+            state.selectedBranch = null;
           }
         }
       }
@@ -537,15 +590,38 @@
       },
     };
 
+    const keepTool = {
+      name: "keep_candidate_branch_separate",
+      description:
+        "Mark a candidate branch to stay separate from main, recorded by the server so a refresh keeps showing it.",
+      parameters: {
+        type: "object",
+        properties: {
+          branch: {
+            type: "string",
+            description: "Name of the candidate branch to keep separate",
+          },
+        },
+        required: ["branch"],
+      },
+      execute: async (args) => {
+        const branchName =
+          args && args.branch ? String(args.branch) : state.selectedBranch;
+        return keepBranchSeparateAction(branchName);
+      },
+    };
+
     if (window.voicebox) {
       window.voicebox?.registerTool(listTool);
       window.voicebox?.registerTool(inspectTool);
       window.voicebox?.registerTool(landTool);
+      window.voicebox?.registerTool(keepTool);
       window.voicebox?.ready?.();
     } else if (window.webMcp) {
       window.webMcp?.registerTool(listTool);
       window.webMcp?.registerTool(inspectTool);
       window.webMcp?.registerTool(landTool);
+      window.webMcp?.registerTool(keepTool);
       window.webMcp?.ready?.();
     }
   }
@@ -554,4 +630,6 @@
   renderBranchList();
   renderSelectedBranchDetails();
   registerVoiceTools();
+  // The truth comes from the server at boot, not from the built-in preview rows (wmiq).
+  refreshCandidateBranches();
 })();

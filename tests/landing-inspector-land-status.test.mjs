@@ -99,9 +99,13 @@ function loadInspector(fetchImpl) {
     },
     addEventListener() {},
   };
+  // calls = the ACTION POSTs only. The module now also GETs /api/branches/candidates at boot
+  // (that boot fetch IS the v1k6 fix — real candidates instead of fabricated rows); this suite's
+  // subject is the POST contract ("nothing is POSTed for a refused land", "every POST hits a route
+  // the host serves"), so the boot GET is not counted here.
   const calls = [];
   const fetch = async (url, options = {}) => {
-    calls.push({ url, options });
+    if ((options.method ?? "GET") !== "GET") calls.push({ url, options });
     return fetchImpl(url, options);
   };
   vm.runInNewContext(SOURCE, { window, document, fetch, console, setTimeout, clearTimeout }, { filename: "public/apps/landing-inspector.js" });
