@@ -211,6 +211,38 @@ test("a sweep is a WINDOW: a start after `until` is a later run's fixture, not t
   }
 });
 
+test("a start EXACTLY at the window's upper bound belongs to this run — pinned without reading the clock (voicebox-beads-n2g8)", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-boundary-"));
+  try {
+    // uptime 10 000s, ticks 1 000 000 → the process started exactly 10 000s before the instant the sweep is told it is.
+    // `now` is INJECTED, so the assertion is a property of the comparison and not of which millisecond this ran in:
+    // that was the defect — with the clock read live, `startMs > until` decided the boundary by the loop's own latency,
+    // and a fixture started this very moment was swept as residue in 195 of 200 reads.
+    const proc = fakeProc([{ pid: 61, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 1_000_000 }], 10_000);
+    const readCwd = cwdOf();
+    const at = 1_700_000_000_000;
+    assert.equal(
+      startMsOf(61, { procRoot: proc, now: at }),
+      at,
+      "the fixture must start exactly at the boundary instant for this test to mean anything",
+    );
+    const since = at - 4 * 3600 * 1000;
+    assert.deepEqual(
+      strayChildren({ root, procRoot: proc, readCwd, since, until: at, now: at }),
+      [],
+      "a start AT the upper bound is this run's own fixture, not the previous run's residue",
+    );
+    assert.deepEqual(
+      strayChildren({ root, procRoot: proc, readCwd, since, until: at + 1, now: at }).map((v) => v.pid),
+      [61],
+      "and the window is not vacuous: one millisecond later the same start IS inside it",
+    );
+    rmSync(proc, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("both runners share ONE previous-run window: inside it is residue, older is the janitor's, later is this run's (voicebox-beads-qy8m)", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-previous-"));
   try {

@@ -38,7 +38,7 @@ export const FIXTURE_SHAPES = Object.freeze([
  * Process start time in ms since the epoch, from `/proc/<pid>/stat` field 22 (clock ticks since boot) and
  * `/proc/uptime`. Returns null when the process is gone or the fields are unreadable — never a guess.
  */
-export function startMsOf(pid, { procRoot = "/proc", uptimeSec = null } = {}) {
+export function startMsOf(pid, { procRoot = "/proc", uptimeSec = null, now = Date.now() } = {}) {
   try {
     const stat = readFileSync(path.join(procRoot, String(pid), "stat"), "utf8");
     // The comm field is parenthesised and may contain spaces, so count from the LAST ')'.
@@ -49,7 +49,10 @@ export function startMsOf(pid, { procRoot = "/proc", uptimeSec = null } = {}) {
     const ticksPerSec = 100; // USER_HZ; Linux's fixed value for this field
     // Epoch ms of the process's start: the machine booted (now - uptime) and the process has run `ticks` since then.
     // Subtracting instead of adding puts every start time near the epoch, which silently filters every victim out.
-    return Math.round(Date.now() - boot * 1000 + (ticks / ticksPerSec) * 1000);
+    // `now` is passed in by the caller so every pid in ONE sweep is measured against the SAME instant
+    // (voicebox-beads-n2g8): reading the clock per pid made two processes' starts differ by the loop's own latency,
+    // and made the window boundary depend on which millisecond the loop happened to be in.
+    return Math.round(now - boot * 1000 + (ticks / ticksPerSec) * 1000);
   } catch {
     return null;
   }
@@ -87,6 +90,7 @@ export function strayChildren({
   shapes = FIXTURE_SHAPES,
   procRoot = "/proc",
   uptimeSec = null,
+  now = Date.now(),
   readCwd = (pid) => readlinkSync(path.join(procRoot, String(pid), "cwd")),
 } = {}) {
   if (!root) throw new Error("strayChildren: root is required — a sweep with no worktree would be a box-wide kill");
@@ -121,11 +125,14 @@ export function strayChildren({
     // cannot prove the process started during this run, and an unreadable /proc is not a licence to kill a server that
     // was already there. Before this, a missing startMs skipped the age guard entirely and made EVERY fixture in the
     // worktree a victim (review finding on voicebox-beads-9xqs, P2).
-    const startMs = startMsOf(pid, { procRoot, uptimeSec });
+    const startMs = startMsOf(pid, { procRoot, uptimeSec, now });
     if (startMs === null || startMs < since) continue;
     // `until` is the other half of a window: a start AFTER it belongs to a later run (our own children, when the sweep
-    // runs beside them), so it is not a victim of this sweep either.
-    if (startMs > until) continue;
+    // runs beside them), so it is not a victim of this sweep either. A start AT it belongs to this run as well — the
+    // start time is derived from `uptime` and a tick count, so an instant can be reported as the boundary itself, and
+    // treating that as "earlier" is how a fixture started this very moment was swept by the run that started it
+    // (voicebox-beads-n2g8: 195 of 200 reads classified the just-started fixture as residue).
+    if (startMs >= until) continue;
     found.push({ pid, cmdline, cwd: wanted, startMs });
   }
   return found;
@@ -170,7 +177,9 @@ export function sweepPreviousFixtures({
   ...rest
 } = {}) {
   if (!(windowSecs > 0)) return { victims: [], killed: [] };
-  return sweepStrays({ root, since: at - windowSecs * 1000, until: at, procRoot, ...rest });
+  // `now: at` keeps this one clock reading: the window is `at - windowSecs … at`, and every pid's start is measured
+  // against `at` too, so the boundary is a property of the call rather than of the loop's timing (voicebox-beads-n2g8).
+  return sweepStrays({ root, since: at - windowSecs * 1000, until: at, now: at, procRoot, ...rest });
 }
 
 /** `strayChildren` + `killStrays`, with this process and its ancestors always excluded. */

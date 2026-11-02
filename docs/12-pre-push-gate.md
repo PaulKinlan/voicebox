@@ -269,6 +269,16 @@ with no worktree is refused rather than becoming a box-wide kill. A fixture olde
 hand-started server is never a victim; another lane's worktree is never a victim either, because the cwd has to match.
 
 The rules that keep attribution honest, and what the first review of this change caught:
+- **A window's END is measured against the same instant as its starts, and a start AT that instant is this run's.**
+  `sweepPreviousFixtures` sweeps the previous run's residue in `at - window … at`; every pid's start and the window itself
+  are now derived from **one** clock reading (`at`), instead of each pid reading `Date.now()` for itself, and
+  `strayChildren` spares a start that is `>= until` rather than `> until`. Both halves were needed: with a clock read
+  per pid, a fixture that started *this very moment* could compute a start one millisecond *below* the boundary and be
+  swept by the run that started it — measured at 195 of 200 reads on a fast machine, while a loaded one passed because
+  its own latency pushed the reading past the boundary (`voicebox-beads-n2g8`; the unit tier was red on `main` from
+  `f22e8280` until this). The boundary is now asserted with an INJECTED clock — a start exactly at the upper bound is
+  spared, and the same start is a victim when the window's end is one millisecond later — so the comparison is a
+  property of the code rather than of the millisecond the fan-out happened to run in.
 - **The age fact fails CLOSED.** A process whose start time cannot be read is *not* a victim: the start time is one of
   the three facts, so an unreadable `/proc/<pid>/stat` cannot be a licence to kill a server that was already running.
   (The first version skipped the guard when the start time was missing, which turned every fixture in the worktree into a
@@ -303,8 +313,9 @@ behind — `[gate-tier] swept 1 leaked fixture(s) from this worktree: <pid> (<cm
 not the sweep to thank. It complements rather than replaces the fleet-wide `scripts/reap-stale-servers.mjs`, whose subject
 is a fixture older than four hours; this one is bounded by the run that caused it.
 
-Verified: `tests/stray-sweep.test.mjs` (nine unit cases, including one real detached `…server.mjs` that is killed, a
-control in another directory that survives, the fail-closed and pinned arms, and the window), a completed `runGate`
+Verified: `tests/stray-sweep.test.mjs` (eleven unit cases, including one real detached `…server.mjs` that is killed, a
+control in another directory that survives, the fail-closed and pinned arms, the window, and the window's boundary
+asserted with an injected clock), a completed `runGate`
 leaving no fixture, a `SIGTERM` to a run with a fixture in flight leaving none (gate exit 143), and — for the run that is
 killed outright — a fixture older than the run being swept by the next run's start sweep while that run still exits 0.
 
