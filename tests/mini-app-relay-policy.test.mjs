@@ -3,7 +3,7 @@
 //
 // THE FINDING. public/relay-target.mjs decided only that a target was SAME-ORIGIN, and the relay then fetched it
 // with the bridge page's own authority. server.mjs treats any request carrying this page's Origin as the room
-// operator (`hasExtensionAuthority`), and lib/routes/branches.mjs gates landing on nothing else — so an
+// operator (`hasExtensionAuthority`), and the branch routes gate landing on nothing else — so an
 // opaque-origin sandboxed frame could ask the bridge to `POST /api/branches/merge` and the bridge ran
 // `git checkout` + `git merge` on the repository. The reviewer's repro got `{ok:true, status:200}`.
 //
