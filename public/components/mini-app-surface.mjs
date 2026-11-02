@@ -87,6 +87,10 @@ export function initMiniAppHost({
       if (window.__voiceboxMiniAppRegistry) {
         window.__voiceboxMiniAppRegistry.updateTools("active-room-app", data.tools);
       }
+    } else if (data.type === "host_action_cancel") {
+      // The bridge gave up waiting (voicebox-beads-a96w round 2). Drop the bar and refuse it: an Allow that lands
+      // after the app was told "nothing was sent" would be exactly the lie this protocol exists to prevent.
+      if (pendingHostAction) pendingHostAction.finish(false, "the app's relay gave up waiting for an answer");
     } else if (data.type === "host_action_request") {
       void answerHostAction(data);
     } else if (data.type === "tool_result" && data.callId && pendingToolCalls.has(data.callId)) {
@@ -126,6 +130,10 @@ export function initMiniAppHost({
   // because a branch merge is a git operation; but BOUNDED, because the app is waiting and, once dispatched, the
   // honest answer to "did it happen?" can no longer be "no".
   const HOST_ACTION_FETCH_MS = 120000;
+  // The room's consent window. The bridge outwaits this by a margin on purpose (voicebox-beads-a96w round 2): the
+  // bar appears a round trip after the bridge starts waiting, so equal windows meant the app could be told nothing
+  // was sent while this bar was still clickable, and Allow would then perform the request anyway.
+  const HOST_ACTION_CONSENT_MS = 120000;
 
   function clearHostActionPrompt() {
     if (!pendingHostAction) return;
@@ -208,7 +216,7 @@ export function initMiniAppHost({
       deny.addEventListener("click", () => finish(false, "the room's operator denied this action"));
       const timer = setTimeout(
         () => finish(false, "nobody answered the room's approval prompt in time"),
-        120000,
+        HOST_ACTION_CONSENT_MS,
       );
       pendingHostAction = { el: bar, timer, finish };
       // The safe answer is the focused one: a stray Enter or Space must not land a branch.

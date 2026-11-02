@@ -123,7 +123,7 @@ function loadBridge({ consentMs = null, fetchMs = null } = {}) {
   // numbers this file pins, and patching them here keeps every assertion about the SHIPPED logic
   // (voicebox-beads-a96w).
   const source = BRIDGE_SOURCE
-    .replace(/hostActionConsentMs: \d+/, `hostActionConsentMs: ${consentMs ?? 120000}`)
+    .replace(/hostActionConsentMs: \d+/, `hostActionConsentMs: ${consentMs ?? 180000}`)
     .replace(/hostActionFetchMs: \d+/, `hostActionFetchMs: ${fetchMs ?? 180000}`);
   vm.runInContext(source, context, { filename: "public/mini-app-bridge.js" });
 
@@ -385,4 +385,39 @@ test("the room reports the dispatch BEFORE it fetches, so a slow fetch cannot ma
   assert.match(room.slice(fetchAt), /signal: abort\.signal/, "the room's fetch cannot be abandoned");
   const catchPath = room.slice(room.indexOf("} catch (err) {", fetchAt));
   assert.match(catchPath.slice(0, 800), /indeterminate: true/, "a dispatched request that fails must be reported as indeterminate");
+});
+
+test("the relay OUTWAITS the room's own prompt, and cancels it rather than leaving a live Allow behind (a96w round 2)", () => {
+  // Round 2 of the finding: two independent consent windows. The room renders its bar a round trip AFTER the bridge
+  // starts waiting, so equal windows meant the bridge could give up first — "nothing was sent" — while the room's
+  // Allow was still clickable, and a click then performed the mutation behind a lie. Two properties close it, and
+  // both are pinned numerically here because a 120s browser wait cannot be driven:
+  const bridgeSource = readFileSync(path.join(root, "public", "mini-app-bridge.js"), "utf8");
+  const roomSource = readFileSync(path.join(root, "public", "components", "mini-app-surface.mjs"), "utf8");
+  const bridgeConsent = Number(/hostActionConsentMs: (\d+)/.exec(bridgeSource)?.[1]);
+  const roomConsent = Number(/HOST_ACTION_CONSENT_MS = (\d+)/.exec(roomSource)?.[1]);
+  assert.ok(Number.isFinite(bridgeConsent) && Number.isFinite(roomConsent), "both consent windows must be named constants");
+  assert.ok(
+    bridgeConsent > roomConsent,
+    `the relay must outwait the room (${bridgeConsent}ms vs ${roomConsent}ms), or it can give up while the bar is live`,
+  );
+  assert.match(roomSource, /data\.type === "host_action_cancel"/, "the room must handle the relay giving up");
+  assert.match(
+    roomSource.slice(roomSource.indexOf('data.type === "host_action_cancel"')),
+    /pendingHostAction\.finish\(/,
+    "a cancelled host action must drop the bar, not leave it clickable",
+  );
+});
+
+test("giving up on the prompt CANCELS the room before the app is told nothing was sent (a96w round 2)", async () => {
+  const bridge = loadBridge({ consentMs: 30, fetchMs: 10_000 });
+  bridge.askFrame(THE_REPRO);
+  await waitFor("the refusal", () => bridge.frameInbox.length > 0, 1000);
+  const inbox = bridge.hostMessages.map((m) => m.type);
+  assert.ok(inbox.includes("host_action_cancel"), `the room was left with a live prompt: ${JSON.stringify(inbox)}`);
+  const cancel = bridge.hostMessages.find((m) => m.type === "host_action_cancel");
+  assert.equal(cancel.callId, "untrusted");
+  const reply = bridge.frameInbox[0];
+  assert.equal(reply.refused, "host-action-no-operator");
+  assert.match(reply.error, /nothing was sent/);
 });
