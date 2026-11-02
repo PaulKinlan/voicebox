@@ -44,9 +44,14 @@ const BOUNDS = {
   // The fetch relay (voicebox-beads-v1k6): buffered whole, bounded, same-origin paths only.
   fetchRelayTimeoutMs: 30000,
   fetchRelayMaxBodyBytes: 262144,
-  // A host action waits for a PERSON, not for a socket, so its bound is minutes rather than seconds
-  // (voicebox-beads-j6im). The fetch underneath keeps the 30s bound above.
-  hostActionTimeoutMs: 120000,
+  // A host action is TWO waits, not one (voicebox-beads-a96w). The first waits for a PERSON to answer the
+  // room's prompt, and while it runs nothing has been dispatched — so its expiry may honestly say "nothing was
+  // sent". The second starts only when the room reports it has dispatched the request, and from that moment the
+  // mutation may already have been applied, so its expiry must say so instead. One clock covering both was the
+  // finding: it could expire during the room's own fetch and tell the app nothing was sent after a branch had
+  // landed. The fetch underneath keeps the 30s bound above; these are human/deferred waits, so minutes.
+  hostActionConsentMs: 120000,
+  hostActionFetchMs: 180000,
 };
 
 const INJECTED_SDK = `<script>
@@ -107,7 +112,10 @@ const INJECTED_SDK = `<script>
   // what may be carried at all, and whether a request is a read or a host mutation. The frame refuses here
   // so the app hears the reason immediately; the bridge re-classifies and that copy is the boundary.
   var relayPolicy = (${String(relayPolicy)});
-  var HOST_ACTION_TIMEOUT_MS = ${BOUNDS.hostActionTimeoutMs};
+  // The frame's own backstop, deliberately LONGER than the bridge's two phases together: the bridge always
+  // answers first, and this one exists only for a relay that stopped answering — so it must not claim the
+  // request was never sent (voicebox-beads-a96w).
+  var HOST_ACTION_WAIT_MS = ${BOUNDS.hostActionConsentMs + BOUNDS.hostActionFetchMs + 30000};
   window.fetch = function(input, init) {
     var url = typeof input === "string" ? input : (input && input.url) || "";
     // A Request carries its own method, headers and body, and its .url is always ABSOLUTE — so the old relay
@@ -144,13 +152,13 @@ const INJECTED_SDK = `<script>
     }
     return new Promise(function(resolve, reject) {
       var callId = "fetch-" + (++fetchSeq);
-      // A host action is waiting on a person's answer in the room, so it gets the longer bound; a read is
-      // waiting on a socket and keeps the short one.
-      var waitMs = policy.kind === "host-action" ? HOST_ACTION_TIMEOUT_MS : FETCH_RELAY_TIMEOUT_MS;
+      // A host action waits on a person and then on the room's own request, so it gets the longer backstop; a
+      // read is waiting on a socket and keeps the short one.
+      var waitMs = policy.kind === "host-action" ? HOST_ACTION_WAIT_MS : FETCH_RELAY_TIMEOUT_MS;
       var timer = setTimeout(function() {
         if (pendingFetches.delete(callId)) {
           reject(new Error(policy.kind === "host-action"
-            ? "the room did not answer this host action within " + HOST_ACTION_TIMEOUT_MS + "ms; nothing was sent"
+            ? "the relay stopped answering this host action; its outcome is UNKNOWN — check the room before retrying"
             : "fetch relay timed out after " + FETCH_RELAY_TIMEOUT_MS + "ms"));
         }
       }, waitMs);
@@ -960,13 +968,40 @@ function validateToolArgs(params, rawArgs) {
 // is buffered whole and capped.
 // A host action, asked of the room and awaited (voicebox-beads-j6im). The bridge does NOT fetch these: the
 // app never gets the room's Origin, and the room performs the request itself only when a person approves it.
+//
+// TWO WAITS, BECAUSE THE TRUTH CHANGES BETWEEN THEM (voicebox-beads-a96w). Until the room reports that it has
+// dispatched the request, nothing has been sent, so a timeout may say exactly that. Once the room reports
+// `host_action_state: executing`, the request is out — the mutation may land, and may already have landed — so a
+// timeout there must be INDETERMINATE rather than a cheerful "nothing was sent". One clock for both phases was
+// the finding: it started before consent, so a slow operator plus the room's own fetch could exhaust it and the
+// app was told nothing had been sent after a branch had been merged.
 function awaitHostAction(request) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      pendingHostActions.delete(request.callId);
-      resolve({ ok: false, error: "the room did not answer this host action in time; nothing was sent" });
-    }, BOUNDS.hostActionTimeoutMs);
-    pendingHostActions.set(request.callId, { resolve, timer });
+    const pending = { resolve, timer: null, phase: "consent" };
+    const rearm = (ms, onExpire) => {
+      clearTimeout(pending.timer);
+      pending.timer = setTimeout(() => {
+        pendingHostActions.delete(request.callId);
+        onExpire();
+      }, ms);
+    };
+    pending.executing = () => {
+      if (pending.phase !== "consent") return;
+      pending.phase = "executing";
+      rearm(BOUNDS.hostActionFetchMs, () => resolve({
+        ok: false,
+        indeterminate: true,
+        refused: "host-action-unanswered",
+        error: "the room approved this host action and has begun performing it, but its answer did not arrive within "
+          + BOUNDS.hostActionFetchMs + "ms; it may have been applied — check before retrying",
+      }));
+    };
+    rearm(BOUNDS.hostActionConsentMs, () => resolve({
+      ok: false,
+      refused: "host-action-no-operator",
+      error: "nobody answered the room's approval prompt in time; nothing was sent",
+    }));
+    pendingHostActions.set(request.callId, pending);
     postToHost({
       type: "host_action_request",
       callId: request.callId,
@@ -1032,7 +1067,9 @@ async function handleFetchRelay(data) {
       body: data.body,
     });
     if (!answer || answer.ok !== true) {
-      reply({ ok: false, error: answer?.error || "the room refused this host action" });
+      // `indeterminate` crosses to the frame so an app can tell "the room refused" from "the room may have done
+      // it and could not tell me" (voicebox-beads-a96w). Collapsing the two was the whole defect.
+      reply({ ok: false, indeterminate: answer?.indeterminate === true, refused: answer?.refused, error: answer?.error || "the room refused this host action" });
       return;
     }
     reply({
@@ -1177,7 +1214,7 @@ function dispatchCallTool(data) {
   // code, and a tool that asks the room for a host action is waiting on a human — the bridge's 5s bound would
   // otherwise refuse every consented landing from the voice path ("land feat/x" → consent prompt → answer),
   // which is the path the whole change exists to keep honest rather than to remove. The waiting is still
-  // bounded: the host action itself has BOUNDS.hostActionTimeoutMs, the bridge allows ONE pending at a time,
+  // bounded: the host action itself has two bounds (consent, then fetch: voicebox-beads-a96w), ONE pending at a time,
   // and the prompt is answered by a click, so this cannot be used to buy unbounded time.
   const entry = { timer: null, resolve: () => clearTimeout(entry.timer) };
   const armCallTimer = () => setTimeout(() => {
@@ -1279,6 +1316,10 @@ window.addEventListener("message", (event) => {
         inner.srcdoc = injectSdkIntoHtml(rawHtml);
       } else if (msg.type === "call_tool") {
         dispatchCallTool(msg);
+      } else if (msg.type === "host_action_state") {
+        // The room has DISPATCHED the request (voicebox-beads-a96w). From here the wait is for an answer, not for
+        // a person, so the clock that may say "nothing was sent" is retired and the indeterminate one armed.
+        pendingHostActions.get(msg.callId)?.executing?.();
       } else if (msg.type === "host_action_result") {
         // The room's answer to a host action (voicebox-beads-j6im): approval and the route's own response, or a
         // named refusal. Nothing reaches the server until this arrives.
