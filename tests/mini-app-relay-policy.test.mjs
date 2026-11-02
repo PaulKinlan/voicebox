@@ -72,7 +72,7 @@ async function waitFor(label, predicate, ms = 500) {
  * Load the bridge the way /mini-app-bridge.html does, then complete both handshakes (the room's port and the
  * inner frame's port) so the test can speak as either side.
  */
-function loadBridge() {
+function loadBridge({ consentMs = null, fetchMs = null } = {}) {
   const fetchCalls = [];
   const hostMessages = [];
   const frameMessages = [];
@@ -119,7 +119,13 @@ function loadBridge() {
     relayBody,
     relayPolicy,
   });
-  vm.runInContext(BRIDGE_SOURCE, context, { filename: "public/mini-app-bridge.js" });
+  // The reviewer's repro accelerated the module's own bounds rather than waiting 120s; the bounds are the two
+  // numbers this file pins, and patching them here keeps every assertion about the SHIPPED logic
+  // (voicebox-beads-a96w).
+  const source = BRIDGE_SOURCE
+    .replace(/hostActionConsentMs: \d+/, `hostActionConsentMs: ${consentMs ?? 120000}`)
+    .replace(/hostActionFetchMs: \d+/, `hostActionFetchMs: ${fetchMs ?? 180000}`);
+  vm.runInContext(source, context, { filename: "public/mini-app-bridge.js" });
 
   const deliver = (event) => {
     for (const fn of [...listeners]) fn(event);
@@ -158,6 +164,10 @@ function loadBridge() {
     /** Speak as the room: answer the host action the bridge asked about. */
     answerHostAction(answer) {
       roomChannel.port1.postMessage({ type: "host_action_result", ...answer });
+    },
+    /** Speak as the room: report that the request has been DISPATCHED (voicebox-beads-a96w). */
+    hostActionState({ callId, state }) {
+      roomChannel.port1.postMessage({ type: "host_action_state", callId, state });
     },
   };
 }
@@ -299,4 +309,80 @@ test("the policy tables are the one classification site, and they name their ans
 test("the frame SDK embeds this same policy, so the two realms cannot drift", () => {
   assert.match(BRIDGE_FILE, /import \{ relayPolicy \} from "\.\/relay-policy\.mjs";/);
   assert.match(BRIDGE_FILE, /var relayPolicy = \(\$\{String\(relayPolicy\)\}\);/, "the injected SDK must be built from this function's own source");
+});
+
+// ── THE TWO WAITS (voicebox-beads-a96w) ───────────────────────────────────────────────────────────────
+//
+// The reviewer's repro: accelerate the single 120s clock to 40ms, have the operator Allow at 30ms and the room
+// answer 25ms after that — the app was told "the room did not answer this host action in time; nothing was sent"
+// while the room had actually performed the mutation. One clock covered the wait for a person AND the room's own
+// fetch, so the truth changed underneath it. These three cases pin the three states a wait can end in.
+
+test("an approval answered after the consent clock would have expired still reaches the app (reviewer's repro, a96w)", async () => {
+  // Wide apart on purpose: consent retires almost immediately, the room's answer is deliberately much later.
+  const bridge = loadBridge({ consentMs: 20, fetchMs: 400 });
+  bridge.askFrame(THE_REPRO);
+  await waitFor("the host_action_request", () => bridge.hostMessages.length > 0);
+  // The operator approves and the room DISPATCHES — this is the message the old code had no way to send.
+  bridge.hostActionState({ callId: "untrusted", state: "executing" });
+  await new Promise((resolve) => setTimeout(resolve, 60)); // well past the consent clock
+  bridge.answerHostAction({
+    callId: "untrusted",
+    ok: true,
+    status: 200,
+    headers: { "content-type": "application/json" },
+    bodyText: JSON.stringify({ ok: true, landed: true }),
+  });
+  await waitFor("the answer", () => bridge.frameInbox.length > 0);
+
+  const reply = bridge.frameInbox[0];
+  assert.equal(reply.ok, true, `the room's own answer was lost: ${JSON.stringify(reply)}`);
+  assert.equal(reply.status, 200);
+  assert.match(reply.bodyText, /landed/);
+  assert.doesNotMatch(String(reply.error ?? ""), /nothing was sent/);
+});
+
+test("a room that dispatched and then went silent says INDETERMINATE, never 'nothing was sent' (a96w)", async () => {
+  const bridge = loadBridge({ consentMs: 1000, fetchMs: 30 });
+  bridge.askFrame(THE_REPRO);
+  await waitFor("the host_action_request", () => bridge.hostMessages.length > 0);
+  bridge.hostActionState({ callId: "untrusted", state: "executing" });
+  await waitFor("the indeterminate answer", () => bridge.frameInbox.length > 0, 1000);
+
+  const reply = bridge.frameInbox[0];
+  assert.equal(reply.ok, false);
+  assert.equal(reply.indeterminate, true, "a dispatched request whose answer never arrived must be indeterminate");
+  assert.equal(reply.refused, "host-action-unanswered");
+  assert.match(reply.error, /may have been applied/);
+  assert.doesNotMatch(reply.error, /nothing was sent/, "the app was told a dispatched request was never sent");
+});
+
+test("nobody answering the room's prompt says nothing was sent, and stays a refusal (a96w)", async () => {
+  const bridge = loadBridge({ consentMs: 30, fetchMs: 10_000 });
+  bridge.askFrame(THE_REPRO);
+  await waitFor("the refusal", () => bridge.frameInbox.length > 0, 1000);
+
+  const reply = bridge.frameInbox[0];
+  assert.equal(reply.ok, false);
+  assert.equal(reply.refused, "host-action-no-operator");
+  assert.match(reply.error, /nothing was sent/);
+  assert.notEqual(reply.indeterminate, true, "an unanswered prompt sent nothing, so it cannot be indeterminate");
+  assert.deepEqual(bridge.fetchCalls, [], "the bridge sent the request while waiting for a person");
+});
+
+test("the room reports the dispatch BEFORE it fetches, so a slow fetch cannot masquerade as 'nothing was sent' (a96w)", () => {
+  // The bridge's honest two-phase clock is only honest if the room tells it when the request goes out. Nothing
+  // in this file can drive a 120s browser fetch, so the ordering itself is pinned here: an `executing` message
+  // that arrived after the fetch — or a fetch with no bound — would restore exactly the defect.
+  const room = readFileSync(path.join(root, "public", "components", "mini-app-surface.mjs"), "utf8");
+  const dispatch = room.indexOf('type: "host_action_state", callId, state: "executing"');
+  const fetchAt = room.indexOf("response = await fetch(path, {");
+  assert.ok(dispatch > 0, "the room never reports that it dispatched the request");
+  assert.ok(fetchAt > 0, "the room's host-action fetch moved; this pin needs re-reading");
+  assert.ok(dispatch < fetchAt, "the dispatch report must precede the fetch, or a timeout during the fetch still lies");
+  // And a dispatched request must be BOUNDED (an abandoned request is an indeterminate outcome, not a clean no).
+  assert.match(room, /HOST_ACTION_FETCH_MS = \d+/, "the room's own request has no bound");
+  assert.match(room.slice(fetchAt), /signal: abort\.signal/, "the room's fetch cannot be abandoned");
+  const catchPath = room.slice(room.indexOf("} catch (err) {", fetchAt));
+  assert.match(catchPath.slice(0, 800), /indeterminate: true/, "a dispatched request that fails must be reported as indeterminate");
 });

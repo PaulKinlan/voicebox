@@ -122,6 +122,11 @@ export function initMiniAppHost({
     } catch {}
   }
 
+  // The room's own bound on the request it performs after a person approved it (voicebox-beads-a96w). Generous,
+  // because a branch merge is a git operation; but BOUNDED, because the app is waiting and, once dispatched, the
+  // honest answer to "did it happen?" can no longer be "no".
+  const HOST_ACTION_FETCH_MS = 120000;
+
   function clearHostActionPrompt() {
     if (!pendingHostAction) return;
     const { el, timer } = pendingHostAction;
@@ -256,6 +261,14 @@ export function initMiniAppHost({
     // the app can mint. Raw fetch (not the injected `request`) so the app gets the route's real status and body
     // bytes back verbatim, unparsed — an app that screenshots `res.status` must not be shown a laundered one.
     const declaredType = typeof data.contentType === "string" && data.contentType ? data.contentType : carried.contentType;
+    // DISPATCHED (voicebox-beads-a96w): tell the app's bridge that the wait is no longer for a person, before the
+    // request is on the wire. Its consent clock retires on this message and a much longer one takes over, so a
+    // slow operator plus a slow route can never make the app hear "nothing was sent" about a request that ran.
+    try {
+      if (currentChannel) currentChannel.port1.postMessage({ type: "host_action_state", callId, state: "executing" });
+    } catch {}
+    const abort = new AbortController();
+    const deadline = setTimeout(() => abort.abort(), HOST_ACTION_FETCH_MS);
     let response;
     try {
       response = await fetch(path, {
@@ -263,10 +276,22 @@ export function initMiniAppHost({
         // No content-type for a rebuilt FormData: fetch has to set the multipart boundary itself.
         ...(declaredType ? { headers: { "content-type": declaredType } } : {}),
         body: carried.body,
+        signal: abort.signal,
       });
     } catch (err) {
-      replyToApp(callId, { ok: false, error: `the room's request did not complete: ${err?.message ?? String(err)}` });
+      // The request WAS dispatched, so this is an indeterminate outcome, not a refusal: a timeout can abandon a
+      // request the server went on to apply, and a network error can follow a request that arrived.
+      replyToApp(callId, {
+        ok: false,
+        indeterminate: true,
+        refused: abort.signal.aborted ? "host-action-abandoned" : "host-action-unanswered",
+        error: abort.signal.aborted
+          ? `the room abandoned this request after ${HOST_ACTION_FETCH_MS}ms; it had already been sent, so it may have been applied — check before retrying`
+          : `the room's request did not complete (${err?.message ?? String(err)}); it had already been sent, so it may have been applied`,
+      });
       return;
+    } finally {
+      clearTimeout(deadline);
     }
     const bodyText = await response.text().catch(() => "");
     replyToApp(callId, {
