@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { FIXTURE_SHAPES, killStrays, startMsOf, STRAY_PREVIOUS_SECS, strayChildren, sweepPreviousFixtures, sweepStrays } from "../scripts/stray-sweep.mjs";
+import { FIXTURE_SHAPES, killStrays, startMsOf, START_UNCERTAINTY_MS, STRAY_PREVIOUS_SECS, strayChildren, sweepPreviousFixtures, sweepStrays } from "../scripts/stray-sweep.mjs";
 
 // The fixture's name is ASSEMBLED, not spelled: a test that names `server.mjs` in a spawn argument is classified LIVE by
 // scripts/test-lanes.mjs (a path signal: "it starts a server of its own"), and this file must stay in the unit tier where
@@ -260,10 +260,18 @@ test("a start EXACTLY at the window's upper bound belongs to this run — pinned
       [],
       "a start AT the upper bound is this run's own fixture, not the previous run's residue",
     );
+    // The bound carries START_UNCERTAINTY_MS of slack for a quantised clock (voicebox-beads-8n5f), so a start inside
+    // that slack is spared too — and a start a whole margin BELOW it is still residue. Both directions asserted, so
+    // the window can be neither vacuous nor amnestied.
     assert.deepEqual(
-      strayChildren({ root, procRoot: proc, readCwd, since, until: at + 1, clock }).map((v) => v.pid),
+      strayChildren({ root, procRoot: proc, readCwd, since, until: at + START_UNCERTAINTY_MS - 1, clock }),
+      [],
+      "a start within the clock's own uncertainty of the bound belongs to this run",
+    );
+    assert.deepEqual(
+      strayChildren({ root, procRoot: proc, readCwd, since, until: at + START_UNCERTAINTY_MS + 1, clock }).map((v) => v.pid),
       [61],
-      "and the window is not vacuous: one millisecond later the same start IS inside it",
+      "and past that uncertainty the same start IS inside the previous run's window: the sweep is not vacuous",
     );
     rmSync(proc, { recursive: true, force: true });
   } finally {
@@ -290,6 +298,39 @@ test("both runners share ONE previous-run window: inside it is residue, older is
     // windowSecs 0 is the documented opt-out, and it must not fall through to "sweep everything".
     assert.deepEqual(sweepPreviousFixtures({ root, procRoot: proc, readCwd: cwd, windowSecs: 0 }).victims, []);
     rmSync(proc, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("quantised uptime cannot date a later fixture before the window's end (voicebox-beads-8n5f)", () => {
+  // The reviewer's precision model: /proc rounds uptime to hundredths and the stat start to centisecond ticks, so a
+  // process that really began 1ms AFTER the bound is REPORTED a few ms before it. Fake /proc: uptime 1000.00 with
+  // ticks 99 999 => the measured start is exactly 10ms before the wall clock, while the process is imagined to have
+  // started 2ms before it. With `until = wall - 3ms`, the truth is "later than the window" and the measurement says
+  // "7ms earlier".
+  const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-precision-"));
+  try {
+    const proc = fakeProc([
+      { pid: 907531, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 99_999 },
+    ], 1000);
+    const readCwd = cwdOf();
+    const clock = { wallMs: 1_700_000_000_000, uptimeSec: 1000 };
+    const measured = startMsOf(907531, { procRoot: proc, clock });
+    const at = clock.wallMs - 3;
+    assert.ok(measured < at, `the measurement must be wrong in the dangerous direction for this test to mean anything: ${measured} vs ${at}`);
+    assert.deepEqual(
+      strayChildren({ root, procRoot: proc, readCwd, since: at - 4 * 3600 * 1000, until: at, clock }).map((v) => v.pid),
+      [],
+      "a fixture the quantised clock dates a few ms before the bound was swept as previous-run residue",
+    );
+    // CONTROL, so the slack is not a blanket amnesty: residue a whole 200ms older than the bound is still a victim.
+    assert.deepEqual(
+      strayChildren({ root, procRoot: proc, readCwd, since: at - 4 * 3600 * 1000, until: measured + 200, clock }).map((v) => v.pid),
+      [907531],
+      "real residue must still be swept, or the margin has made the sweep vacuous",
+    );
+    assert.ok(START_UNCERTAINTY_MS >= 20 && START_UNCERTAINTY_MS <= 500, "the slack must cover both quantisations without swallowing the window");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

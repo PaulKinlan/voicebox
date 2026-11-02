@@ -27,6 +27,14 @@ import path from "node:path";
  * cannot, and nothing inside a synchronously-growing wasm cell can run to notice). Its cmdline is
  * `node --…flags lib/wasm-worker.mjs`, which none of the shapes above matched, so the sweep would have walked past it.
  */
+// HOW WRONG A COMPUTED START TIME CAN BE, and therefore how much slack the upper bound carries
+// (voicebox-beads-8n5f). A start is derived from `/proc/uptime` (resolution 1/100 s) and `/proc/<pid>/stat` field 22
+// (USER_HZ = 1/100 s), so a process that truly began AFTER the window's end can be REPORTED a few milliseconds
+// before it: the reviewer measured a fixture starting 1ms after `at` computing 7ms before it. 50ms covers both
+// truncations with margin. The slack only ever SPARES a process, so it can delay sweeping a true fixture by one
+// run — never kill one that started after us, which is the direction that loses work.
+export const START_UNCERTAINTY_MS = 50;
+
 export const FIXTURE_SHAPES = Object.freeze([
   /(?:^|\/)server\.mjs(?:\s|$)/,
   /(?:^|\/)wasm-worker\.mjs(?:\s|$)/,
@@ -155,7 +163,11 @@ export function strayChildren({
     // start time is derived from `uptime` and a tick count, so an instant can be reported as the boundary itself, and
     // treating that as "earlier" is how a fixture started this very moment was swept by the run that started it
     // (voicebox-beads-n2g8: 195 of 200 reads classified the just-started fixture as residue).
-    if (startMs >= until) continue;
+    //
+    // And the comparison carries START_UNCERTAINTY_MS of slack, because those two numbers are quantised: a process
+    // that really began 1ms after the bound is REPORTED up to ~8ms before it, which `>=` alone cannot see
+    // (voicebox-beads-8n5f). The slack errs towards sparing, so it can never kill a newer fixture.
+    if (startMs >= until - START_UNCERTAINTY_MS) continue;
     found.push({ pid, cmdline, cwd: wanted, startMs });
   }
   return found;
