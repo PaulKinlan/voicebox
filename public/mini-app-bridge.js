@@ -50,7 +50,14 @@ const BOUNDS = {
   // mutation may already have been applied, so its expiry must say so instead. One clock covering both was the
   // finding: it could expire during the room's own fetch and tell the app nothing was sent after a branch had
   // landed. The fetch underneath keeps the 30s bound above; these are human/deferred waits, so minutes.
-  hostActionConsentMs: 120000,
+  // STRICTLY LONGER than the room's own consent prompt (public/components/mini-app-surface.mjs,
+  // HOST_ACTION_CONSENT_MS = 120 s). This is not decoration (voicebox-beads-a96w, round 2): the room renders the
+  // bar after a round trip, so ITS 120 s always expires slightly AFTER this one would have. When both were 120 s,
+  // this clock could give up first — "nothing was sent" — while the room's bar was still on screen and still
+  // clickable, so a person pressing Allow a moment later performed the mutation anyway. Outwaiting the room is what
+  // makes "the prompt expired" true when this clock fires; the cancel below makes the room stop even if it somehow
+  // outlives us.
+  hostActionConsentMs: 180000,
   hostActionFetchMs: 180000,
 };
 
@@ -996,11 +1003,16 @@ function awaitHostAction(request) {
           + BOUNDS.hostActionFetchMs + "ms; it may have been applied — check before retrying",
       }));
     };
-    rearm(BOUNDS.hostActionConsentMs, () => resolve({
-      ok: false,
-      refused: "host-action-no-operator",
-      error: "nobody answered the room's approval prompt in time; nothing was sent",
-    }));
+    rearm(BOUNDS.hostActionConsentMs, () => {
+      // Tell the room to drop the prompt BEFORE answering the app (voicebox-beads-a96w, round 2): a bar that
+      // outlives this clock is a bar whose Allow would perform a request the app has just been told was never sent.
+      postToHost({ type: "host_action_cancel", callId: request.callId, reason: "the relay gave up waiting for an answer" });
+      resolve({
+        ok: false,
+        refused: "host-action-no-operator",
+        error: "the room's approval prompt expired without an answer; nothing was sent",
+      });
+    });
     pendingHostActions.set(request.callId, pending);
     postToHost({
       type: "host_action_request",
