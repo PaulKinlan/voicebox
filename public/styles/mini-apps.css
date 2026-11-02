@@ -175,6 +175,60 @@
   background: transparent;
 }
 
+/* Operator consent for a host action (voicebox-beads-j6im). It lives in the viewport BELOW the frame and
+   outside it, on purpose: app HTML cannot draw over, restyle or script this prompt, so the click that
+   authorizes `git merge` is a click in the room's own DOM. Not a dialog — a bar, so it does not steal the
+   page's modal stack. */
+.mini-app-consent {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 10px 12px;
+  border-block-start: 1px solid var(--line);
+  background: color-mix(in srgb, var(--warn) 8%, var(--card));
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+.mini-app-consent-what {
+  margin: 0;
+  flex: 1 1 100%;
+  color: var(--text);
+}
+.mini-app-consent-detail {
+  margin: 0;
+  flex: 1 1 100%;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.mini-app-consent-actions {
+  display: flex;
+  gap: 8px;
+  margin-inline-start: auto;
+}
+.mini-app-consent-actions button {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+}
+.mini-app-consent-allow {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+}
+.mini-app-consent-actions button:hover {
+  background: color-mix(in srgb, var(--text) 8%, var(--card));
+}
+.mini-app-consent-actions button:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 2px;
+}
+
 /* ── Anchored Mini-App Floating Bubble Dock ──────────────────────────── */
 .mini-app-dock {
   position: fixed;

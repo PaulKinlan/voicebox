@@ -52,6 +52,10 @@ test.before(async () => {
     { name: "feat/keep-me", file: "kept.txt", content: "kept\n" },
     { name: "feat/land-me", file: "landed.txt", content: "landed\n" },
     { name: "feat/doomed", file: "doomed.txt", content: "doomed\n" },
+    // The room-mounted drive's own candidates (voicebox-beads-j6im): landing them happens ONLY through the room's
+    // consent prompt, so they must not be the branches the standalone-page drives already merged.
+    { name: "feat/room-land-me", file: "room-landed.txt", content: "room landed\n" },
+    { name: "feat/room-deny-me", file: "room-denied.txt", content: "room denied\n" },
   ]);
   server = await startServer({ env: { VOICEBOX_WORKSPACE: path.join(scratch, "ws") }, cwd: scratch });
   const declared = await fetch(`${server.base}/api/root`, {
@@ -183,4 +187,132 @@ test("ROOM-MOUNTED inspector shows the server's real candidates through the fetc
   const names = (out.result?.branches ?? []).map((b) => b.name);
   assert.ok(names.includes("feat/keep-me"), `the room surface must list the server's real branch — got ${JSON.stringify(names)}`);
   assert.ok(!names.includes("feat/voice-greeting-polish"), `a fabricated fixture branch is on the room surface: ${JSON.stringify(names)}`);
+});
+
+// ── HOST ACTIONS IN THE ROOM (voicebox-beads-j6im) ────────────────────────────────────────────────
+//
+// The finding: the fetch relay gave the sandboxed app the room page's own Origin, server.mjs treats that
+// Origin as the operator, and the bridge then ran `git merge` for app code. These two drives are the
+// boundary, measured in a real browser against a real repo:
+//
+//   * a landing asked from inside the sandbox does NOT touch the repo, and does not even leave the page —
+//     the room asks the person first, in a bar outside the iframe;
+//   * an Allow is what lands it, and the app still reports the SERVER's own answer (the ulhi rule);
+//   * a Deny lands nothing and tells the app why.
+
+test("the room asks before it lands, and only an Allow merges the branch (j6im)", async (t) => {
+  const page = await launch({ width: 1100, height: 800 });
+  t.after(() => page.close());
+  await page.goto(`${server.base}/`);
+  await page.waitFor(
+    () => typeof window.__voiceboxOpenBranchInspector === "function" && !!window.__voiceboxMiniAppRegistry,
+    { label: "room booted" },
+  );
+  await page.evaluate(() => window.__voiceboxOpenBranchInspector());
+  await page.waitFor(
+    () => window.__voiceboxMiniAppRegistry.getAllTools().some((x) => x.name === "land_candidate_branch"),
+    { label: "inspector tools registered through the bridge", timeout: 30000 },
+  );
+
+  // The app's own list first (a landing needs the branch it knows about, and this is the room's real read path).
+  const listed = await page.evaluate(
+    () => window.__voiceboxMiniAppRegistry.executeTool("list_candidate_branches", {}),
+  );
+  assert.ok(
+    (listed.result?.branches ?? []).some((b) => b.name === "feat/room-land-me"),
+    `the room surface must know the branch before it can land it — got ${JSON.stringify(listed).slice(0, 300)}`,
+  );
+
+  // Ask the app to land, exactly as a click inside the sandbox does — and do not await it yet.
+  await page.evaluate(() => {
+    window.__j6imLand = window.__voiceboxMiniAppRegistry.executeTool("land_candidate_branch", {
+      branch: "feat/room-land-me",
+    });
+  });
+
+  await page.waitFor(() => !!document.querySelector(".mini-app-consent"), {
+    label: "the room's consent prompt",
+    timeout: 15000,
+  });
+  const prompt = await page.evaluate(() => ({
+    text: document.querySelector(".mini-app-consent")?.textContent ?? "",
+    // The prompt lives in the room's DOM, NOT inside the app's frame: app HTML cannot draw over it.
+    insideAppFrame: !!document.querySelector("#mini-app-outer-frame")?.contentDocument?.querySelector?.(".mini-app-consent"),
+    focused: document.activeElement?.className ?? "",
+  }));
+  assert.match(prompt.text, /branch-landing-inspector/, `the prompt must name the app: ${prompt.text}`);
+  assert.match(prompt.text, /POST \/api\/branches\/merge/, `the prompt must name the route: ${prompt.text}`);
+  assert.match(prompt.text, /feat\/room-land-me/, `the prompt must name the branch: ${prompt.text}`);
+  assert.equal(prompt.insideAppFrame, false, "the consent prompt must be the room's, not the app's");
+  assert.match(prompt.focused, /deny/, "the safe answer must hold focus, so a stray Enter cannot land a branch");
+
+  // Nothing has happened yet: the merge is a fact in the repo, not a message.
+  assert.equal(
+    existsSync(path.join(workspaceRepo, "room-landed.txt")),
+    false,
+    "the branch was merged before anyone approved it",
+  );
+
+  await page.click(".mini-app-consent-allow");
+  const out = await page.evaluate(() => window.__j6imLand);
+  assert.equal(out.ok, true, `the approved landing failed: ${JSON.stringify(out).slice(0, 300)}`);
+  assert.equal(out.result?.action, "landed");
+  // The app reports the SERVER's answer, and the repo is where the claim is checkable.
+  assert.equal(readFileSync(path.join(workspaceRepo, "room-landed.txt"), "utf8"), "room landed\n");
+  assert.equal(git(workspaceRepo, ["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+  assert.equal(
+    await page.evaluate(() => !document.querySelector(".mini-app-consent")),
+    true,
+    "the prompt must go away once it has been answered",
+  );
+});
+
+test("a Deny sends nothing and tells the app why (j6im)", async (t) => {
+  const page = await launch({ width: 1100, height: 800 });
+  t.after(() => page.close());
+  await page.goto(`${server.base}/`);
+  await page.waitFor(
+    () => typeof window.__voiceboxOpenBranchInspector === "function" && !!window.__voiceboxMiniAppRegistry,
+    { label: "room booted" },
+  );
+  await page.evaluate(() => window.__voiceboxOpenBranchInspector());
+  await page.waitFor(
+    () => window.__voiceboxMiniAppRegistry.getAllTools().some((x) => x.name === "land_candidate_branch"),
+    { label: "inspector tools registered through the bridge", timeout: 30000 },
+  );
+
+  const listed = await page.evaluate(
+    () => window.__voiceboxMiniAppRegistry.executeTool("list_candidate_branches", {}),
+  );
+  assert.ok(
+    (listed.result?.branches ?? []).some((b) => b.name === "feat/room-deny-me"),
+    `the room surface must know the branch before it can land it — got ${JSON.stringify(listed).slice(0, 300)}`,
+  );
+  await page.evaluate(() => {
+    window.__j6imDeny = window.__voiceboxMiniAppRegistry.executeTool("land_candidate_branch", {
+      branch: "feat/room-deny-me",
+    });
+  });
+  await page.waitFor(() => !!document.querySelector(".mini-app-consent"), {
+    label: "the room's consent prompt",
+    timeout: 15000,
+  });
+  await page.click(".mini-app-consent-deny");
+
+  const out = await page.evaluate(() => window.__j6imDeny);
+  // The bridge's envelope says the tool RAN (ok:true); the tool's own result is the app's answer, and the app's
+  // answer must be a refusal that names the denial — not "Landed …" (the ulhi rule).
+  assert.equal(out.ok, true, `the tool call itself failed: ${JSON.stringify(out).slice(0, 300)}`);
+  assert.equal(out.result?.ok, false, `a denied landing reported success: ${JSON.stringify(out.result).slice(0, 300)}`);
+  assert.match(
+    String(out.result?.error ?? ""),
+    /denied/i,
+    `the app must be told why: ${JSON.stringify(out.result).slice(0, 300)}`,
+  );
+  assert.equal(
+    existsSync(path.join(workspaceRepo, "room-denied.txt")),
+    false,
+    "a denied landing merged the branch anyway",
+  );
+  assert.equal(git(workspaceRepo, ["rev-parse", "--abbrev-ref", "HEAD"]), "main");
 });

@@ -10,7 +10,7 @@ Because mini-app code may be model-generated or third-party HTML/JavaScript, Voi
 
 An untrusted mini-app executes arbitrary HTML, CSS, and JavaScript. The sandbox prevents it from:
 1. **Reading Host Origin Storage**: Cannot access the Voicebox host's `localStorage`, `sessionStorage`, `document.cookie`, `IndexedDB`, or Origin Private File System (OPFS). (The injected SDK provides a transient, document-local in-memory `Storage` shim so apps that call `localStorage.getItem`/`setItem` work without throwing a `SecurityError`.)
-2. **Calling Host APIs**: Because the inner iframe has an opaque `"null"` origin, browser CORS policies block direct `fetch()` calls to `/api/file`, `/api/turn`, or `/api/execute`.
+2. **Calling Host APIs**: Because the inner iframe has an opaque `"null"` origin, browser CORS policies block direct `fetch()` calls to `/api/file`, `/api/turn`, or `/api/execute`. The relay described in §2.1 is the only path it has, and that path is a POLICY: an explicit table of reads it may perform, and NO way to mutate host state except by asking the room's operator (see §2.1).
 3. **Hijacking Navigation or Modals**: Top-level navigation, popups, and blocking `alert()`/`prompt()` dialogs are disabled by the iframe `sandbox` attribute.
 4. **Spoofing Ambient `postMessage` Events**: All communication travels over a private, transferred `MessagePort` rather than ambient window messages.
 5. **Hanging or Exhausting the Host**: Tool calls are bounded by a 5,000ms timeout and a 64 KiB output limit.
@@ -55,6 +55,29 @@ An untrusted mini-app executes arbitrary HTML, CSS, and JavaScript. The sandbox 
 ### Why Two Nested Iframes?
 - **Outer Mediator Bridge (`/mini-app-bridge.html`)**: Runs on the same origin as the Voicebox room so the host window can verify `event.origin === window.location.origin` and `e.source === outer.contentWindow` to prevent foreign frames from triggering spoofed premature handshakes. When receiving `mini_app_ready`, the bridge strictly verifies `event.source === inner.contentWindow` before transferring the MessagePort, preventing decoy frames from forcing port churn or intercepting handshake transfers (`voicebox-beads-221y`).
 - **Inner Sandboxed Frame (`sandbox="allow-scripts"`)**: Runs in a unique opaque origin (`"null"`). On every load or reload of the inner document, the outer bridge creates a fresh `MessageChannel` and transfers `port2` into the inner frame. The inner SDK strictly verifies `event.source === window.parent` before accepting `mini_app_handshake` and adopting the port, ensuring other frames in the document cannot hijack the app's tool execution channel; the inner document itself remains the trusted counterparty for tool execution.
+
+---
+
+## 2.1 The Fetch Relay Is a Policy, Not a Proxy (`public/relay-policy.mjs`, `voicebox-beads-j6im`)
+
+The relay exists because an opaque-origin frame cannot `fetch()` the room's own API (voicebox-beads-v1k6): the landing inspector showed fabricated branches while 23 real ones sat behind an API it could not read. For a while the relay admitted **any same-origin path and any method**, fetched with the bridge page's own authority — and `server.mjs` treats a request carrying this page's `Origin` as the room operator (`hasExtensionAuthority`). So app code could ask the bridge for `POST /api/branches/merge` and the merge ran: `git checkout` + `git merge` on the host repository, with the frame's say-so as the only authorization. Same-origin admission is not evidence that the frame is the room UI.
+
+`public/relay-policy.mjs` is now the single classification site — one function, three outcomes, both allowlists as tables inside it so the same source is embedded in the frame SDK (`String(relayPolicy)`) and can never drift from the bridge's copy:
+
+| Outcome | When | What happens |
+|---|---|---|
+| `read` | `GET`/`HEAD` of a path named in the read table (`/api/health`, `/api/branches/candidates`, `/api/branches/diff`, `/api/harnesses`, `/api/tasks`, `/api/mini-apps`, `/api/changelog`, `/api/doctor`, `/api/agents`, `/api/tools`, `/api/presence`, `/api/fleet`, `/api/activity`, `/api/extensions`, `/api/extensions/catalogue`, `/api/gemini/capabilities`) | The bridge relays it, as before. Deliberately absent: `/api/keys`, `/api/agent-settings`, `/api/root`, `/api/file(s)`, `/api/grep` — configuration secrets and workspace file bytes are not a sandboxed app's read capability. |
+| `host-action` | A route named in the host-action table (`POST /api/branches/merge`, `POST /api/branches/keep-separate`, `POST /api/harnesses/configure`, `POST /api/tasks/delegate`) | **The bridge never fetches it.** It posts `host_action_request` to the room, which re-checks the same table and renders a consent bar in the mini-app card — the app id, the plain-language action, the route and a preview of the body (a FormData is described entry by entry). Allow performs the fetch from the ROOM with its own authority; Deny, the two-minute timeout, or closing the app answers a refusal and sends nothing. One host action may be pending at a time. |
+| `refuse` | Anything else | Refused by name (`relay-read-not-approved`, `relay-mutation-not-approved`, `relay-bad-path`, `relay-no-method`) with the reason, and nothing leaves the frame. |
+
+Two consequences worth stating plainly:
+
+- **The app never holds the room's authority.** The approval is a click in the room's own DOM, outside the iframe — app HTML cannot draw over it, restyle it or script it — and the room performs the request itself. The route's REAL status and body bytes go back to the app, so an app that says "Landed …" is still reporting the server's answer (the `voicebox-beads-ulhi` rule).
+- **The tool budget does not run while a person is deciding.** A tool call that raises a host action is waiting on a human, so the bridge's 5 s call bound and the room's 5.5 s bound are suspended while a prompt is unanswered and resume afterwards. The wait is still bounded: the prompt answers itself after two minutes, and only one may be pending.
+
+The consent bar is PREPENDED to the app's viewport, not appended: the card is anchored bottom-right and the floating bubble dock (z-index 110) sits over its lower-right corner, so a bar below the frame was a bar a real mouse could press but never click — measured, the press landed on the button and the release on `.mini-app-bubble`.
+
+Verification: `tests/mini-app-relay-policy.test.mjs` drives the real bridge module in a VM with a fake DOM, a fake MessagePort pair and a fake room, and speaks to it exactly as the sandboxed frame does — the reviewer's `POST /api/branches/merge` repro never reaches `fetch`, only an answered prompt lets it through, and the denied/refused cases send nothing. `tests/landing-inspector-actions.test.mjs` drives the room-mounted inspector for real: the prompt names the app, the route and the branch, the merge does not happen until Allow, and a Deny lands nothing. `tests/mini-app-relay-formdata.test.mjs` mounts a probe app the room's way and asserts the multipart BYTES on the wire after the approval.
 
 ---
 
@@ -130,7 +153,10 @@ Saving asks the same question: the target is the **file** the caller named (a wo
 | **Iframe Sandbox** | `sandbox="allow-scripts"` | `<iframe id="inner-app">` | Blocks host storage, cookies, top navigation, and modals. |
 | **Max Tools per App** | `16` | Outer Bridge & `MiniAppRegistry` | Excess tool registrations are rejected. |
 | **Max Tool Output** | `64 KiB` (`65,536` bytes) | Outer Bridge | Refused with `"output over budget (max 64KB)"`. |
-| **Tool Execution Timeout** | `5,000ms` | Outer Bridge | Refused with `"tool execution timed out after 5000ms"`. |
+| **Tool Execution Timeout** | `5,000ms` (suspended while a host-action prompt is unanswered) | Outer Bridge | Refused with `"tool execution timed out after 5000ms"`. |
+| **Relayed Reads** | Explicit path table | `public/relay-policy.mjs` (frame SDK, bridge and room) | Refused with `relay-read-not-approved` for any other path. |
+| **Relayed Mutations** | NONE — host-action table only, with operator consent | `public/relay-policy.mjs` + room consent bar | Refused with `relay-mutation-not-approved`; an approved action is performed by the room, never the bridge. |
+| **Host-Action Consent Wait** | `120,000ms`, one pending at a time | Room (`public/components/mini-app-surface.mjs`) | Denied with a named refusal; nothing is sent. |
 | **Tool Arguments Schema & Bounds** | Declared JSON schema, max 64 KiB | Host & Outer Bridge | Refused with `missing-argument`, `invalid-argument-type`, `invalid-argument-enum`, or `invalid-tool-arguments`. |
 | **Tool Arguments Depth & Nodes** | Max 32 nesting levels, max 2048 nodes | Host & Outer Bridge | Refused with `invalid-argument-bounds`. |
 | **Tool Schema Depth & Nodes** | Max 16 nesting levels, max 512 nodes | Host (`validateWebMcpTool`) & Bridge | Refused with `invalid-tool-parameters`. |
