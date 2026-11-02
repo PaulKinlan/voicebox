@@ -211,6 +211,31 @@ test("a sweep is a WINDOW: a start after `until` is a later run's fixture, not t
   }
 });
 
+test("the sweep's own delay cannot backdate a fixture into the previous run's window (voicebox-beads-6p4u)", () => {
+  // THE REVIEWER'S REPRO. `sweepPreviousFixtures({at})` used to hand `at` down as the wall clock while
+  // /proc/uptime was read at sweep time, so every inferred start moved into the past by however long the sweep
+  // itself was late: a fixture that really began AFTER `at` was computed BEFORE it, i.e. a SIGKILL aimed at a
+  // concurrent lane's server. uptime 1000s with ticks 99 000 means "started 1s before NOW", and `at` is ten
+  // seconds before NOW, so this fixture is unambiguously later than the run's start.
+  const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-delayed-"));
+  try {
+    const proc = fakeProc([
+      { pid: 71, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 99_000 },
+    ], 1000);
+    const readCwd = cwdOf();
+    const at = Date.now() - 10_000;
+    const previous = sweepPreviousFixtures({ root, at, windowSecs: 4 * 3600, procRoot: proc, readCwd });
+    assert.deepEqual(previous.victims, [], "a fixture started after `at` was swept because the sweep was late");
+    // The same fixture IS residue of a window whose end is later than its start, so the emptiness above is the
+    // window and not a vacuous sweep: `since`/`until` over its own start must find it.
+    const inWindow = strayChildren({ root, procRoot: proc, readCwd, since: at - 4 * 3600 * 1000, until: Date.now() + 1000 });
+    assert.deepEqual(inWindow.map((v) => v.pid), [71], "the fixture must be findable at all, or the assertion above means nothing");
+    rmSync(proc, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a start EXACTLY at the window's upper bound belongs to this run — pinned without reading the clock (voicebox-beads-n2g8)", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-boundary-"));
   try {
@@ -221,19 +246,22 @@ test("a start EXACTLY at the window's upper bound belongs to this run — pinned
     const proc = fakeProc([{ pid: 61, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 1_000_000 }], 10_000);
     const readCwd = cwdOf();
     const at = 1_700_000_000_000;
+    // A whole clock reading, exactly as readClock() produces it — the seam cannot be half-injected
+    // (voicebox-beads-6p4u), and the fake /proc's uptime is the other half.
+    const clock = { wallMs: at, uptimeSec: 10_000 };
     assert.equal(
-      startMsOf(61, { procRoot: proc, now: at }),
+      startMsOf(61, { procRoot: proc, clock }),
       at,
       "the fixture must start exactly at the boundary instant for this test to mean anything",
     );
     const since = at - 4 * 3600 * 1000;
     assert.deepEqual(
-      strayChildren({ root, procRoot: proc, readCwd, since, until: at, now: at }),
+      strayChildren({ root, procRoot: proc, readCwd, since, until: at, clock }),
       [],
       "a start AT the upper bound is this run's own fixture, not the previous run's residue",
     );
     assert.deepEqual(
-      strayChildren({ root, procRoot: proc, readCwd, since, until: at + 1, now: at }).map((v) => v.pid),
+      strayChildren({ root, procRoot: proc, readCwd, since, until: at + 1, clock }).map((v) => v.pid),
       [61],
       "and the window is not vacuous: one millisecond later the same start IS inside it",
     );

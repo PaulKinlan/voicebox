@@ -35,24 +35,46 @@ export const FIXTURE_SHAPES = Object.freeze([
 ]);
 
 /**
+ * The two numbers a start time needs, read TOGETHER: the wall clock (ms since the epoch) and how long the machine
+ * has been up (from `/proc/uptime`). They are only meaningful as a pair (voicebox-beads-6p4u) — deriving the boot
+ * instant from one and "now" from another shifts every inferred start into the past by the difference — so this is
+ * the only place that reads them, and a test that needs a fixed clock passes an object of this same shape.
+ */
+export function readClock({ procRoot = "/proc", now = () => Date.now() } = {}) {
+  try {
+    const uptimeSec = Number(readFileSync(path.join(procRoot, "uptime"), "utf8").split(" ")[0]);
+    const wallMs = now();
+    if (!Number.isFinite(uptimeSec) || !Number.isFinite(wallMs)) return null;
+    return { wallMs, uptimeSec };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Process start time in ms since the epoch, from `/proc/<pid>/stat` field 22 (clock ticks since boot) and
  * `/proc/uptime`. Returns null when the process is gone or the fields are unreadable — never a guess.
  */
-export function startMsOf(pid, { procRoot = "/proc", uptimeSec = null, now = Date.now() } = {}) {
+export function startMsOf(pid, { procRoot = "/proc", clock = null } = {}) {
   try {
     const stat = readFileSync(path.join(procRoot, String(pid), "stat"), "utf8");
     // The comm field is parenthesised and may contain spaces, so count from the LAST ')'.
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     const ticks = Number(fields[19]); // field 22 overall, 20th after comm+state
-    const boot = uptimeSec ?? Number(readFileSync(path.join(procRoot, "uptime"), "utf8").split(" ")[0]);
-    if (!Number.isFinite(ticks) || !Number.isFinite(boot)) return null;
+    // THE WALL CLOCK AND THE UPTIME ARE ONE READING (voicebox-beads-6p4u). A start time needs both numbers, and
+    // they are only meaningful together: `boot` is derived from /proc/uptime, so the wall clock paired with it has
+    // to be the same instant. Taking them separately — a wall clock from earlier with a fresh uptime — backdates
+    // every inferred start by the difference. The reviewer measured a process that really began 1s AFTER the
+    // run's `at` being computed 9s BEFORE it, when the sweep reused `at` ten seconds late: that is a SIGKILL
+    // aimed at a concurrent lane's fixture. So there is no `now` argument to misuse: production calls
+    // readClock(), which reads both here, and a test passes a whole `clock` object from that same shape.
+    const reading = clock ?? readClock({ procRoot });
+    const { wallMs, uptimeSec } = reading ?? {};
+    if (!Number.isFinite(ticks) || !Number.isFinite(uptimeSec) || !Number.isFinite(wallMs)) return null;
     const ticksPerSec = 100; // USER_HZ; Linux's fixed value for this field
-    // Epoch ms of the process's start: the machine booted (now - uptime) and the process has run `ticks` since then.
+    // Epoch ms of the process's start: the machine booted (wall - uptime) and the process has run `ticks` since then.
     // Subtracting instead of adding puts every start time near the epoch, which silently filters every victim out.
-    // `now` is passed in by the caller so every pid in ONE sweep is measured against the SAME instant
-    // (voicebox-beads-n2g8): reading the clock per pid made two processes' starts differ by the loop's own latency,
-    // and made the window boundary depend on which millisecond the loop happened to be in.
-    return Math.round(now - boot * 1000 + (ticks / ticksPerSec) * 1000);
+    return Math.round(wallMs - uptimeSec * 1000 + (ticks / ticksPerSec) * 1000);
   } catch {
     return null;
   }
@@ -89,8 +111,9 @@ export function strayChildren({
   exclude = [],
   shapes = FIXTURE_SHAPES,
   procRoot = "/proc",
-  uptimeSec = null,
-  now = Date.now(),
+  // A TEST seam only: a whole clock reading ({wallMs, uptimeSec}) from readClock()'s shape, so a fixed clock
+  // cannot be half-injected (voicebox-beads-6p4u). Production passes nothing and each pid's pair is read together.
+  clock = null,
   readCwd = (pid) => readlinkSync(path.join(procRoot, String(pid), "cwd")),
 } = {}) {
   if (!root) throw new Error("strayChildren: root is required — a sweep with no worktree would be a box-wide kill");
@@ -125,7 +148,7 @@ export function strayChildren({
     // cannot prove the process started during this run, and an unreadable /proc is not a licence to kill a server that
     // was already there. Before this, a missing startMs skipped the age guard entirely and made EVERY fixture in the
     // worktree a victim (review finding on voicebox-beads-9xqs, P2).
-    const startMs = startMsOf(pid, { procRoot, uptimeSec, now });
+    const startMs = startMsOf(pid, { procRoot, clock });
     if (startMs === null || startMs < since) continue;
     // `until` is the other half of a window: a start AFTER it belongs to a later run (our own children, when the sweep
     // runs beside them), so it is not a victim of this sweep either. A start AT it belongs to this run as well — the
@@ -177,9 +200,10 @@ export function sweepPreviousFixtures({
   ...rest
 } = {}) {
   if (!(windowSecs > 0)) return { victims: [], killed: [] };
-  // `now: at` keeps this one clock reading: the window is `at - windowSecs … at`, and every pid's start is measured
-  // against `at` too, so the boundary is a property of the call rather than of the loop's timing (voicebox-beads-n2g8).
-  return sweepStrays({ root, since: at - windowSecs * 1000, until: at, now: at, procRoot, ...rest });
+  // `until: at` is the window's end; the START times are measured with their own clock reading inside startMsOf.
+  // Handing `at` down as that clock was the 6p4u defect: it backdates every start by the sweep's own delay, so a
+  // fixture that began after `at` — a concurrent lane's — looked like the previous run's and was killed.
+  return sweepStrays({ root, since: at - windowSecs * 1000, until: at, procRoot, ...rest });
 }
 
 /** `strayChildren` + `killStrays`, with this process and its ancestors always excluded. */
