@@ -63,7 +63,9 @@ const decisions = new Map([
   ["POST /api/mini-app/tools", "csrf"],
   ["POST /api/delegate", "json"],
   ["POST /api/exec", "json"],
-  ["POST /api/transport/import", "json"],
+  // voicebox-beads-3dma: writes files into the declared root from a caller-supplied bundle, so it is the host's
+  // act — the host token, not the JSON door alone.
+  ["POST /api/transport/import", "host-token"],
   ["POST /api/probe", "csrf"],
   ["POST /api/environments", "json"],
   ["POST /api/turn", "json"],

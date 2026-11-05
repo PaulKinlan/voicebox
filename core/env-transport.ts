@@ -58,7 +58,7 @@ const utf8Encoder = new TextEncoder();
  *
  * Refuses empty strings, leading `/`, Windows drive letters, null bytes,
  * backslashes `\`, `.` or `..` path segments, empty segments (`//`),
- * or `.git/` internal paths.
+ * `.git/` internal paths, or any other dot segment.
  */
 export function validateTransportPath(relPath: string): PathValidationResult {
   if (typeof relPath !== "string" || relPath.trim().length === 0) {
@@ -111,6 +111,18 @@ export function validateTransportPath(relPath: string): PathValidationResult {
         ok: false,
         refused: "invalid-transport-path",
         why: `transport path '${relPath}' targets protected .git internal paths`,
+      };
+    }
+    // DOTFILES ARE NOT TRANSPORTABLE AT ALL (voicebox-beads-3dma). Only `.git` used to be refused here, so a
+    // bundle entry `path: ".bashrc"` imported straight over the machine's shell profile — the transport door
+    // never asked the dotfile question the file verbs ask. The refusal names the segment, because "which dot
+    // segment" is the only useful part of the answer, and it is refused on EXPORT too (the walk and the
+    // explicit `files=` list both pass through this function).
+    if (seg.startsWith(".")) {
+      return {
+        ok: false,
+        refused: "dotfile-refused",
+        why: `transport path '${relPath}' contains the dot segment '${seg}' — dotfiles are host state (credentials, shell profiles, tool config) and are neither exported nor imported by the transport loop`,
       };
     }
   }

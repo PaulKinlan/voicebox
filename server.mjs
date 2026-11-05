@@ -4674,6 +4674,20 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/transport/import") {
+    // THE HOST'S ACT (voicebox-beads-3dma, TM-WRITE-011/TM-TRANSPORT-022). This route writes FILES INTO THE
+    // DECLARED ROOT — the machine's own tree — from a bundle the caller supplies, and it had no authority check at
+    // all: any local process that could reach loopback could import, and the bundle names its own paths, so the
+    // write was arbitrary within (and, given symlinks, in principle beyond) the root. It takes the host token,
+    // the same authority as declaring a root or booting a fence: an Origin header is a claim any local process can
+    // make, and the in-room session token is served openly in the page HTML, so neither distinguishes a local
+    // PROCESS from the person at the keyboard.
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, {
+        ok: false,
+        refused: "host-token-required",
+        why: "importing a transport bundle writes files into the declared root — the host's act. It takes the host token (x-voicebox-host-token); the page cannot hold it, and a bare Origin header is a claim any local process can make.",
+      });
+    }
     if (!active) return json(res, 400, { ...noRootDeclared(), root: null });
     if (active.root.kind !== "machine" || !active.root.path) {
       return json(res, 400, {
@@ -4685,8 +4699,11 @@ async function handle(req, res) {
     }
     const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
     const rawBundle = body?.bundle ?? body;
+    // OVERWRITE IS EXPLICIT, never assumed (voicebox-beads-3dma): the old `body?.overwrite !== false` meant an
+    // omitted field REPLACED existing files. Now a bundle that would clobber something is refused by name
+    // (`file-exists`) unless the caller says `overwrite: true` in so many words.
     const imported = importWorkspaceBundle(active.root.path, rawBundle, {
-      overwrite: body?.overwrite !== false,
+      overwrite: body?.overwrite === true,
     });
     if (!imported.ok) return json(res, 400, { ...imported, root: active.root });
     return json(res, 200, { ...imported, root: active.root });

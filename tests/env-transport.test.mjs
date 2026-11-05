@@ -303,3 +303,80 @@ describe("lib/env-transport — exportWorkspaceBundle & importWorkspaceBundle", 
     });
   });
 });
+
+describe("dotfiles and overwrite are refused by name (voicebox-beads-3dma)", () => {
+  // TM-WRITE-011 / TM-TRANSPORT-022. The import door wrote whatever path the bundle named, and only `.git` was
+  // refused — so an entry ".bashrc" replaced the machine's shell profile. The dotfile question now has one owner
+  // (lib/path-auth.mjs) and the answer reaches both directions of the transport.
+  function bundleWith(files, extra = {}) {
+    const entries = files.map(({ path: rel, content }) => ({
+      path: rel,
+      content,
+      bytes: Buffer.byteLength(content, "utf8"),
+      sha256: sha256Utf8(content),
+    }));
+    return {
+      schema: "voicebox-transport/1",
+      sourceEnvironment: "env-a",
+      sourceKind: "machine",
+      exportedAt: new Date().toISOString(),
+      files: entries,
+      ...extra,
+    };
+  }
+
+  it("a bundle entry that targets a dotfile is refused, and NOTHING is written", () => {
+    for (const dot of [".bashrc", ".config/npm/rc", "src/.env", ".git/config"]) {
+      withScratchDir((root) => {
+        const target = path.join(root, "target");
+        mkdirSync(target, { recursive: true });
+        const res = importWorkspaceBundle(target, bundleWith([{ path: dot, content: "pwned\n" }]), { overwrite: true });
+        assert.equal(res.ok, false, `${dot} was imported`);
+        assert.ok(
+          res.refused === "dotfile-refused" || res.refused === "invalid-transport-path",
+          `${dot} refused as ${res.refused}`,
+        );
+        assert.deepEqual(readdirSync(target), [], `${dot} left something behind`);
+      });
+    }
+  });
+
+  it("the export walk skips dotfiles through the owned denial, including nested ones", () => {
+    withScratchDir((root) => {
+      const env = path.join(root, "env-dots");
+      mkdirSync(path.join(env, "src", ".cache"), { recursive: true });
+      mkdirSync(path.join(env, "src", "keep"), { recursive: true });
+      writeFileSync(path.join(env, ".env"), "SECRET=1\n", "utf8");
+      writeFileSync(path.join(env, "src", ".hidden"), "hidden\n", "utf8");
+      writeFileSync(path.join(env, "src", ".cache", "blob"), "blob\n", "utf8");
+      writeFileSync(path.join(env, "src", "keep", "ok.js"), "ok\n", "utf8");
+      const exported = exportWorkspaceBundle(env, { sourceEnvironment: "env-dots", sourceKind: "machine" });
+      assert.equal(exported.ok, true);
+      assert.deepEqual(exported.bundle.files.map((f) => f.path), ["src/keep/ok.js"]);
+      // AND an explicit files= list cannot smuggle one in either: the same validator answers both doors.
+      const asked = exportWorkspaceBundle(env, { sourceEnvironment: "env-dots", sourceKind: "machine", files: [".env"] });
+      assert.equal(asked.ok, false);
+      assert.equal(asked.refused, "dotfile-refused");
+    });
+  });
+
+  it("overwrite defaults to REFUSING, so an import cannot silently replace a file", () => {
+    withScratchDir((root) => {
+      const target = path.join(root, "target");
+      mkdirSync(target, { recursive: true });
+      writeFileSync(path.join(target, "README.md"), "the person's own edit\n", "utf8");
+      const bundle = bundleWith([{ path: "README.md", content: "from the bundle\n" }]);
+      const refused = importWorkspaceBundle(target, bundle);
+      assert.equal(refused.ok, false);
+      assert.equal(refused.refused, "file-exists");
+      assert.equal(readFileSync(path.join(target, "README.md"), "utf8"), "the person's own edit\n");
+      // The positive control: told to overwrite, it does exactly that.
+      const replaced = importWorkspaceBundle(target, bundle, { overwrite: true });
+      assert.equal(replaced.ok, true, JSON.stringify(replaced));
+      assert.equal(readFileSync(path.join(target, "README.md"), "utf8"), "from the bundle\n");
+      // And a file that does not exist needs no permission: creation is not overwriting.
+      const fresh = importWorkspaceBundle(target, bundleWith([{ path: "NEW.md", content: "new\n" }]));
+      assert.equal(fresh.ok, true, JSON.stringify(fresh));
+    });
+  });
+});
