@@ -27,6 +27,14 @@ import path from "node:path";
  * cannot, and nothing inside a synchronously-growing wasm cell can run to notice). Its cmdline is
  * `node --…flags lib/wasm-worker.mjs`, which none of the shapes above matched, so the sweep would have walked past it.
  */
+// HOW WRONG A COMPUTED START TIME CAN BE, and therefore how much slack the upper bound carries
+// (voicebox-beads-8n5f). A start is derived from `/proc/uptime` (resolution 1/100 s) and `/proc/<pid>/stat` field 22
+// (USER_HZ = 1/100 s), so a process that truly began AFTER the window's end can be REPORTED a few milliseconds
+// before it: the reviewer measured a fixture starting 1ms after `at` computing 7ms before it. 50ms covers both
+// truncations with margin. The slack only ever SPARES a process, so it can delay sweeping a true fixture by one
+// run — never kill one that started after us, which is the direction that loses work.
+export const START_UNCERTAINTY_MS = 50;
+
 export const FIXTURE_SHAPES = Object.freeze([
   /(?:^|\/)server\.mjs(?:\s|$)/,
   /(?:^|\/)wasm-worker\.mjs(?:\s|$)/,
@@ -35,21 +43,46 @@ export const FIXTURE_SHAPES = Object.freeze([
 ]);
 
 /**
+ * The two numbers a start time needs, read TOGETHER: the wall clock (ms since the epoch) and how long the machine
+ * has been up (from `/proc/uptime`). They are only meaningful as a pair (voicebox-beads-6p4u) — deriving the boot
+ * instant from one and "now" from another shifts every inferred start into the past by the difference — so this is
+ * the only place that reads them, and a test that needs a fixed clock passes an object of this same shape.
+ */
+export function readClock({ procRoot = "/proc", now = () => Date.now() } = {}) {
+  try {
+    const uptimeSec = Number(readFileSync(path.join(procRoot, "uptime"), "utf8").split(" ")[0]);
+    const wallMs = now();
+    if (!Number.isFinite(uptimeSec) || !Number.isFinite(wallMs)) return null;
+    return { wallMs, uptimeSec };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Process start time in ms since the epoch, from `/proc/<pid>/stat` field 22 (clock ticks since boot) and
  * `/proc/uptime`. Returns null when the process is gone or the fields are unreadable — never a guess.
  */
-export function startMsOf(pid, { procRoot = "/proc", uptimeSec = null } = {}) {
+export function startMsOf(pid, { procRoot = "/proc", clock = null } = {}) {
   try {
     const stat = readFileSync(path.join(procRoot, String(pid), "stat"), "utf8");
     // The comm field is parenthesised and may contain spaces, so count from the LAST ')'.
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     const ticks = Number(fields[19]); // field 22 overall, 20th after comm+state
-    const boot = uptimeSec ?? Number(readFileSync(path.join(procRoot, "uptime"), "utf8").split(" ")[0]);
-    if (!Number.isFinite(ticks) || !Number.isFinite(boot)) return null;
+    // THE WALL CLOCK AND THE UPTIME ARE ONE READING (voicebox-beads-6p4u). A start time needs both numbers, and
+    // they are only meaningful together: `boot` is derived from /proc/uptime, so the wall clock paired with it has
+    // to be the same instant. Taking them separately — a wall clock from earlier with a fresh uptime — backdates
+    // every inferred start by the difference. The reviewer measured a process that really began 1s AFTER the
+    // run's `at` being computed 9s BEFORE it, when the sweep reused `at` ten seconds late: that is a SIGKILL
+    // aimed at a concurrent lane's fixture. So there is no `now` argument to misuse: production calls
+    // readClock(), which reads both here, and a test passes a whole `clock` object from that same shape.
+    const reading = clock ?? readClock({ procRoot });
+    const { wallMs, uptimeSec } = reading ?? {};
+    if (!Number.isFinite(ticks) || !Number.isFinite(uptimeSec) || !Number.isFinite(wallMs)) return null;
     const ticksPerSec = 100; // USER_HZ; Linux's fixed value for this field
-    // Epoch ms of the process's start: the machine booted (now - uptime) and the process has run `ticks` since then.
+    // Epoch ms of the process's start: the machine booted (wall - uptime) and the process has run `ticks` since then.
     // Subtracting instead of adding puts every start time near the epoch, which silently filters every victim out.
-    return Math.round(Date.now() - boot * 1000 + (ticks / ticksPerSec) * 1000);
+    return Math.round(wallMs - uptimeSec * 1000 + (ticks / ticksPerSec) * 1000);
   } catch {
     return null;
   }
@@ -86,7 +119,9 @@ export function strayChildren({
   exclude = [],
   shapes = FIXTURE_SHAPES,
   procRoot = "/proc",
-  uptimeSec = null,
+  // A TEST seam only: a whole clock reading ({wallMs, uptimeSec}) from readClock()'s shape, so a fixed clock
+  // cannot be half-injected (voicebox-beads-6p4u). Production passes nothing and each pid's pair is read together.
+  clock = null,
   readCwd = (pid) => readlinkSync(path.join(procRoot, String(pid), "cwd")),
 } = {}) {
   if (!root) throw new Error("strayChildren: root is required — a sweep with no worktree would be a box-wide kill");
@@ -121,11 +156,18 @@ export function strayChildren({
     // cannot prove the process started during this run, and an unreadable /proc is not a licence to kill a server that
     // was already there. Before this, a missing startMs skipped the age guard entirely and made EVERY fixture in the
     // worktree a victim (review finding on voicebox-beads-9xqs, P2).
-    const startMs = startMsOf(pid, { procRoot, uptimeSec });
+    const startMs = startMsOf(pid, { procRoot, clock });
     if (startMs === null || startMs < since) continue;
     // `until` is the other half of a window: a start AFTER it belongs to a later run (our own children, when the sweep
-    // runs beside them), so it is not a victim of this sweep either.
-    if (startMs > until) continue;
+    // runs beside them), so it is not a victim of this sweep either. A start AT it belongs to this run as well — the
+    // start time is derived from `uptime` and a tick count, so an instant can be reported as the boundary itself, and
+    // treating that as "earlier" is how a fixture started this very moment was swept by the run that started it
+    // (voicebox-beads-n2g8: 195 of 200 reads classified the just-started fixture as residue).
+    //
+    // And the comparison carries START_UNCERTAINTY_MS of slack, because those two numbers are quantised: a process
+    // that really began 1ms after the bound is REPORTED up to ~8ms before it, which `>=` alone cannot see
+    // (voicebox-beads-8n5f). The slack errs towards sparing, so it can never kill a newer fixture.
+    if (startMs >= until - START_UNCERTAINTY_MS) continue;
     found.push({ pid, cmdline, cwd: wanted, startMs });
   }
   return found;
@@ -170,6 +212,9 @@ export function sweepPreviousFixtures({
   ...rest
 } = {}) {
   if (!(windowSecs > 0)) return { victims: [], killed: [] };
+  // `until: at` is the window's end; the START times are measured with their own clock reading inside startMsOf.
+  // Handing `at` down as that clock was the 6p4u defect: it backdates every start by the sweep's own delay, so a
+  // fixture that began after `at` — a concurrent lane's — looked like the previous run's and was killed.
   return sweepStrays({ root, since: at - windowSecs * 1000, until: at, procRoot, ...rest });
 }
 

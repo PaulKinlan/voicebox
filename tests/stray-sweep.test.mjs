@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { FIXTURE_SHAPES, killStrays, startMsOf, STRAY_PREVIOUS_SECS, strayChildren, sweepPreviousFixtures, sweepStrays } from "../scripts/stray-sweep.mjs";
+import { FIXTURE_SHAPES, killStrays, startMsOf, START_UNCERTAINTY_MS, STRAY_PREVIOUS_SECS, strayChildren, sweepPreviousFixtures, sweepStrays } from "../scripts/stray-sweep.mjs";
 
 // The fixture's name is ASSEMBLED, not spelled: a test that names `server.mjs` in a spawn argument is classified LIVE by
 // scripts/test-lanes.mjs (a path signal: "it starts a server of its own"), and this file must stay in the unit tier where
@@ -211,6 +211,74 @@ test("a sweep is a WINDOW: a start after `until` is a later run's fixture, not t
   }
 });
 
+test("the sweep's own delay cannot backdate a fixture into the previous run's window (voicebox-beads-6p4u)", () => {
+  // THE REVIEWER'S REPRO. `sweepPreviousFixtures({at})` used to hand `at` down as the wall clock while
+  // /proc/uptime was read at sweep time, so every inferred start moved into the past by however long the sweep
+  // itself was late: a fixture that really began AFTER `at` was computed BEFORE it, i.e. a SIGKILL aimed at a
+  // concurrent lane's server. uptime 1000s with ticks 99 000 means "started 1s before NOW", and `at` is ten
+  // seconds before NOW, so this fixture is unambiguously later than the run's start.
+  const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-delayed-"));
+  try {
+    const proc = fakeProc([
+      { pid: 71, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 99_000 },
+    ], 1000);
+    const readCwd = cwdOf();
+    const at = Date.now() - 10_000;
+    const previous = sweepPreviousFixtures({ root, at, windowSecs: 4 * 3600, procRoot: proc, readCwd });
+    assert.deepEqual(previous.victims, [], "a fixture started after `at` was swept because the sweep was late");
+    // The same fixture IS residue of a window whose end is later than its start, so the emptiness above is the
+    // window and not a vacuous sweep: `since`/`until` over its own start must find it.
+    const inWindow = strayChildren({ root, procRoot: proc, readCwd, since: at - 4 * 3600 * 1000, until: Date.now() + 1000 });
+    assert.deepEqual(inWindow.map((v) => v.pid), [71], "the fixture must be findable at all, or the assertion above means nothing");
+    rmSync(proc, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a start EXACTLY at the window's upper bound belongs to this run — pinned without reading the clock (voicebox-beads-n2g8)", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-boundary-"));
+  try {
+    // uptime 10 000s, ticks 1 000 000 → the process started exactly 10 000s before the instant the sweep is told it is.
+    // `now` is INJECTED, so the assertion is a property of the comparison and not of which millisecond this ran in:
+    // that was the defect — with the clock read live, `startMs > until` decided the boundary by the loop's own latency,
+    // and a fixture started this very moment was swept as residue in 195 of 200 reads.
+    const proc = fakeProc([{ pid: 61, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 1_000_000 }], 10_000);
+    const readCwd = cwdOf();
+    const at = 1_700_000_000_000;
+    // A whole clock reading, exactly as readClock() produces it — the seam cannot be half-injected
+    // (voicebox-beads-6p4u), and the fake /proc's uptime is the other half.
+    const clock = { wallMs: at, uptimeSec: 10_000 };
+    assert.equal(
+      startMsOf(61, { procRoot: proc, clock }),
+      at,
+      "the fixture must start exactly at the boundary instant for this test to mean anything",
+    );
+    const since = at - 4 * 3600 * 1000;
+    assert.deepEqual(
+      strayChildren({ root, procRoot: proc, readCwd, since, until: at, clock }),
+      [],
+      "a start AT the upper bound is this run's own fixture, not the previous run's residue",
+    );
+    // The bound carries START_UNCERTAINTY_MS of slack for a quantised clock (voicebox-beads-8n5f), so a start inside
+    // that slack is spared too — and a start a whole margin BELOW it is still residue. Both directions asserted, so
+    // the window can be neither vacuous nor amnestied.
+    assert.deepEqual(
+      strayChildren({ root, procRoot: proc, readCwd, since, until: at + START_UNCERTAINTY_MS - 1, clock }),
+      [],
+      "a start within the clock's own uncertainty of the bound belongs to this run",
+    );
+    assert.deepEqual(
+      strayChildren({ root, procRoot: proc, readCwd, since, until: at + START_UNCERTAINTY_MS + 1, clock }).map((v) => v.pid),
+      [61],
+      "and past that uncertainty the same start IS inside the previous run's window: the sweep is not vacuous",
+    );
+    rmSync(proc, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("both runners share ONE previous-run window: inside it is residue, older is the janitor's, later is this run's (voicebox-beads-qy8m)", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-previous-"));
   try {
@@ -230,6 +298,39 @@ test("both runners share ONE previous-run window: inside it is residue, older is
     // windowSecs 0 is the documented opt-out, and it must not fall through to "sweep everything".
     assert.deepEqual(sweepPreviousFixtures({ root, procRoot: proc, readCwd: cwd, windowSecs: 0 }).victims, []);
     rmSync(proc, { recursive: true, force: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("quantised uptime cannot date a later fixture before the window's end (voicebox-beads-8n5f)", () => {
+  // The reviewer's precision model: /proc rounds uptime to hundredths and the stat start to centisecond ticks, so a
+  // process that really began 1ms AFTER the bound is REPORTED a few ms before it. Fake /proc: uptime 1000.00 with
+  // ticks 99 999 => the measured start is exactly 10ms before the wall clock, while the process is imagined to have
+  // started 2ms before it. With `until = wall - 3ms`, the truth is "later than the window" and the measurement says
+  // "7ms earlier".
+  const root = mkdtempSync(path.join(os.tmpdir(), "voicebox-root-precision-"));
+  try {
+    const proc = fakeProc([
+      { pid: 907531, cmdline: `node ${root}/${SERVER_MJS}`, cwd: root, ticks: 99_999 },
+    ], 1000);
+    const readCwd = cwdOf();
+    const clock = { wallMs: 1_700_000_000_000, uptimeSec: 1000 };
+    const measured = startMsOf(907531, { procRoot: proc, clock });
+    const at = clock.wallMs - 3;
+    assert.ok(measured < at, `the measurement must be wrong in the dangerous direction for this test to mean anything: ${measured} vs ${at}`);
+    assert.deepEqual(
+      strayChildren({ root, procRoot: proc, readCwd, since: at - 4 * 3600 * 1000, until: at, clock }).map((v) => v.pid),
+      [],
+      "a fixture the quantised clock dates a few ms before the bound was swept as previous-run residue",
+    );
+    // CONTROL, so the slack is not a blanket amnesty: residue a whole 200ms older than the bound is still a victim.
+    assert.deepEqual(
+      strayChildren({ root, procRoot: proc, readCwd, since: at - 4 * 3600 * 1000, until: measured + 200, clock }).map((v) => v.pid),
+      [907531],
+      "real residue must still be swept, or the margin has made the sweep vacuous",
+    );
+    assert.ok(START_UNCERTAINTY_MS >= 20 && START_UNCERTAINTY_MS <= 500, "the slack must cover both quantisations without swallowing the window");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

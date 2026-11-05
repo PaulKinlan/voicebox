@@ -269,6 +269,27 @@ with no worktree is refused rather than becoming a box-wide kill. A fixture olde
 hand-started server is never a victim; another lane's worktree is never a victim either, because the cwd has to match.
 
 The rules that keep attribution honest, and what the first review of this change caught:
+- **A start AT the window's end is this run's, and the clock a start is derived from is ONE reading of a pair.**
+  Two defects live here and both are now asserted rather than observed. (1) `strayChildren` spared a start only when
+  `startMs > until`, so a fixture that started *this very moment* — computing to exactly the window's end — was swept
+  by the run that started it: measured at 195 of 200 reads on a fast machine, while a loaded one passed because its own
+  latency pushed the reading past the boundary (`voicebox-beads-n2g8`; the unit tier was red on `main` from
+  `f22e8280` until this). It is `>=` now, and the boundary is pinned with an injected clock — a start exactly at the
+  upper bound is spared, and the same start is a victim when the window's end is one millisecond later. (2) A start
+  time needs the wall clock AND `/proc/uptime`, and they are only meaningful **as a pair**: `boot` comes from the
+  uptime, so the wall clock paired with it has to be the same instant. An earlier draft shared the run's `at` as the
+  wall clock while the uptime was read at sweep time, which backdates every inferred start by however late the sweep
+  is — the reviewer measured a process that really began 1s *after* `at` being computed 9s *before* it when the sweep
+  arrived ten seconds late, i.e. a `SIGKILL` aimed at a concurrent lane's fixture (`voicebox-beads-6p4u`). There is
+  now no wall-clock argument to misuse: `readClock()` is the only place the pair is read, `startMsOf(pid, {clock})`
+  takes a whole reading or none, and `sweepPreviousFixtures` passes only `until` — never a clock. Both defects have
+  their own case in `tests/stray-sweep.test.mjs`, and restoring either the `>` comparison or a reused `at` turns one
+  of them red. A third defect was in the comparison itself: `/proc/uptime` is quantised to 1/100 s and the stat start
+  to `USER_HZ` ticks, so a process that really began 1 ms AFTER the bound can be REPORTED ~8 ms before it (measured),
+  and `>=` alone cannot see that. The upper bound therefore carries `START_UNCERTAINTY_MS` (50 ms) of slack — chosen
+  to cover both quantisations, and in the direction that only ever SPARES a process, so it can delay sweeping a true
+  fixture by one run but never kill one that started after us (`voicebox-beads-8n5f`). The fake-/proc case pins both
+  directions: a start inside the slack is spared, a start a whole margin below it is still swept.
 - **The age fact fails CLOSED.** A process whose start time cannot be read is *not* a victim: the start time is one of
   the three facts, so an unreadable `/proc/<pid>/stat` cannot be a licence to kill a server that was already running.
   (The first version skipped the guard when the start time was missing, which turned every fixture in the worktree into a
@@ -303,8 +324,10 @@ behind — `[gate-tier] swept 1 leaked fixture(s) from this worktree: <pid> (<cm
 not the sweep to thank. It complements rather than replaces the fleet-wide `scripts/reap-stale-servers.mjs`, whose subject
 is a fixture older than four hours; this one is bounded by the run that caused it.
 
-Verified: `tests/stray-sweep.test.mjs` (nine unit cases, including one real detached `…server.mjs` that is killed, a
-control in another directory that survives, the fail-closed and pinned arms, and the window), a completed `runGate`
+Verified: `tests/stray-sweep.test.mjs` (thirteen unit cases, including one real detached `…server.mjs` that is killed, a
+control in another directory that survives, the fail-closed and pinned arms, the window, the window's boundary
+asserted with an injected clock (including the 50 ms quantisation slack, both directions), and a delayed sweep that
+must not backdate a newer fixture), a completed `runGate`
 leaving no fixture, a `SIGTERM` to a run with a fixture in flight leaving none (gate exit 143), and — for the run that is
 killed outright — a fixture older than the run being swept by the next run's start sweep while that run still exits 0.
 
