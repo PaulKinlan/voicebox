@@ -153,6 +153,29 @@ test("runSystemCommand timeout kills the shell's background descendants", async 
   }
 });
 
+test("runSystemCommand answers at the deadline even if a descendant escapes the process group", async () => {
+  const scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "vb-tool-escaped-")));
+  let escapedPid;
+  try {
+    // setsid moves the child to another group; it still inherits the command's pipes.
+    const started = Date.now();
+    const result = await runSystemCommand(scratch, {
+      command: `setsid ${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 10000)" & echo $!; wait`,
+      timeoutMs: 300,
+    });
+    const elapsed = Date.now() - started;
+    escapedPid = Number(result.stdout.trim());
+    assert.ok(Number.isSafeInteger(escapedPid) && escapedPid > 0, JSON.stringify(result));
+    assert.equal(result.refused, "command-timeout", JSON.stringify(result));
+    assert.ok(elapsed < 2000, `a descendant held the pipes open for ${elapsed}ms`);
+  } finally {
+    if (escapedPid) {
+      try { process.kill(escapedPid, "SIGKILL"); } catch { /* already exited */ }
+    }
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
 test("parseRoomFolderTurn does not hijack 'open voicebox' or 'show all tools' as local file reads", () => {
   assert.equal(parseRoomFolderTurn("open voicebox"), null);
   assert.equal(parseRoomFolderTurn("open self"), null);
