@@ -17,6 +17,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { auditFileName } from "../core/audit.ts";
 import { outcomeFor, reduceTask } from "../core/tasks.ts";
 import { createTaskHost } from "../lib/tasks.mjs";
+import { until } from "./lib/task-fixture.mjs";
 
 const environment = "env_0123456789abcdef";
 
@@ -40,11 +41,6 @@ function fixture(t, implementation, deadlineMs = 2000) {
   };
 }
 
-async function until(read, predicate, timeoutMs = 4000) {
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end) { const value = read(); if (predicate(value)) return value; await delay(10); }
-  assert.fail(`condition did not occur: ${JSON.stringify(read())}`);
-}
 
 test("a completed delegation records a CLAIM — never verified effectiveness", async (t) => {
   const f = fixture(t, async () => "the work is done");

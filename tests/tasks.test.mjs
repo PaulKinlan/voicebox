@@ -9,6 +9,7 @@ import { auditFileName } from "../core/audit.ts";
 import { reduceTask, taskInput } from "../core/tasks.ts";
 import { createTaskHost } from "../lib/tasks.mjs";
 import { TaskInterrupted } from "../lib/task-interrupted.mjs";
+import { until } from "./lib/task-fixture.mjs";
 
 const environment = "env_0123456789abcdef";
 function fixture(t, implementation) {
@@ -32,15 +33,6 @@ function runner(run, deadlineMs = 2000) {
 // observed value already correct (["interrupted" x8]), i.e. the poll window expired a moment before the
 // condition it was waiting for was satisfied, and the arm passes 2/2 standalone in ~3s. Waiting longer
 // asserts exactly the same thing; it just stops failing a healthy lane on a starved box.
-async function until(read, predicate, timeoutMs = 15000) {
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end) {
-    const value = read();
-    if (predicate(value)) return value;
-    await delay(5);
-  }
-  assert.fail(`condition did not occur: ${JSON.stringify(read())}`);
-}
 
 test("typed executor interruption is durable; an arbitrary error cannot spoof the outcome", async (t) => {
   for (const [error, state] of [[new TaskInterrupted("harness-ended-outcome-unknown"), "interrupted"], [Object.assign(new Error("failure"), { state: "interrupted", refused: "executor-failed" }), "failed"]]) {

@@ -87,3 +87,27 @@ export async function taskFixture(t, { runtime = true, env: extraEnv = {} } = {}
     },
   };
 }
+
+/**
+ * A MACHINE-SPEED DEADLINE, NOT A SEMANTIC ONE (voicebox-beads-i9k0, voicebox-beads-u32a).
+ *
+ * These suites wait for a RECORDED state: the assertion is about what the audit says, never about how long the
+ * executor took. The deadline therefore bounds only how long a genuinely broken run waits, and every second it is
+ * too short buys a false red. Measured on one gate: `task-redaction`'s partial-secret arm reported "condition did not
+ * occur" with the FINAL read already showing state:"failed" and the redacted partial — the window expired a moment
+ * before the condition it was waiting for was satisfied, because a status read itself costs seconds on a loaded box
+ * (the arm spent 15s inside a 4s window). Running longer asserts exactly the same thing.
+ *
+ * One helper, one deadline, overridable: `VOICEBOX_TASK_POLL_MS=60000 npm run test:unit`.
+ */
+export const TASK_POLL_MS = Number(process.env.VOICEBOX_TASK_POLL_MS ?? 30_000);
+
+export async function until(read, predicate, timeoutMs = TASK_POLL_MS) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const value = read();
+    if (predicate(value)) return value;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`condition did not occur within ${timeoutMs}ms: ${JSON.stringify(read())}`);
+}

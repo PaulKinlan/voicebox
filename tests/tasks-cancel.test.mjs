@@ -7,6 +7,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { auditFileName } from "../core/audit.ts";
 import { createTaskHost } from "../lib/tasks.mjs";
+import { until } from "./lib/task-fixture.mjs";
 
 const environment = "env_0123456789abcdef";
 const runner = (run, deadlineMs = 2000) => ({ check: () => ({ ok: true, mechanism: "closed-no-effects-unit-fixture", bounds: { deadlineMs, maxOutputBytes: 4096 } }), run });
@@ -23,15 +24,6 @@ function fixture(t, implementation) {
   const status = (address, auth = authority) => host.call("task_status", { address }, auth);
   const cancel = (address, auth = authority, graceMs = 2000) => host.call("cancel_task", { address }, auth, graceMs);
   return { dir, host, entries, authority, admit, status, cancel, select: (v) => { selected = v; } };
-}
-async function until(read, predicate, timeoutMs = 4000) {
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end) {
-    const value = read();
-    if (predicate(value)) return value;
-    await delay(5);
-  }
-  assert.fail(`condition did not occur: ${JSON.stringify(read())}`);
 }
 
 test("cancel: the person's stop is requested, the executor observes it, and cancelled is RECORDED — not assumed", async (t) => {

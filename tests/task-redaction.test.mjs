@@ -46,11 +46,6 @@ function fixture(t, implementation, deadlineMs = 2000) {
   };
 }
 
-async function until(read, predicate, timeoutMs = 4000) {
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end) { const value = read(); if (predicate(value)) return value; await delay(10); }
-  assert.fail(`condition did not occur: ${JSON.stringify(read())}`);
-}
 
 function assertScrubbed({ text, view, what }) {
   assert.ok(!text.includes(CANARY), `the canary reached the durable .audit JSONL in ${what}`);
@@ -144,6 +139,7 @@ console.error("stderr mentions ${CANARY} plainly");
 // ── 5lzv: the dormant browser task host gets the same boundary, and console.source is normalized ──
 
 import { createBrowserTaskHost } from "../lib/task-placement.mjs";
+import { until } from "./lib/task-fixture.mjs";
 
 test("the (unwired) browser task host scrubs the terminal answer at ITS durable boundary", async () => {
   // The browser host is not wired into the served app today (only its tests import it); the
