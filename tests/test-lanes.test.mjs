@@ -81,7 +81,15 @@ test("classification detects browser/server helper launches: page-acceptance, ta
 
 test("the lane scripts exist and swap out at the same files npm test runs", () => {
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.match(pkg.scripts["test:unit"], /test-lanes\.mjs --lane unit/);
+  // THE UNIT LANE DISPATCHES PER FILE THROUGH THE TIER RUNNER (voicebox-beads-qgg6): the fleet's fast
+  // gate command is `npm run test:unit`, and the hub reads the gate LOG for `fast-gate: passed: <file>`
+  // lines to decide whether a fast verdict demonstrated anything. A bare `node --test` over the lane emits
+  // none, so every fast verdict in this repo reported coverage UNKNOWN; gate-tier.mjs is the code that
+  // already knows how to emit them (and it is what pre-push.sh runs for the same lane, so the hook and the
+  // fleet gate now record the same thing). The roster is still the CLASSIFIER's, which the first test in
+  // tests/gate-tier.test.mjs holds as an executable assertion.
+  assert.match(pkg.scripts["test:unit"], /gate-tier\.mjs --tier unit/, "the unit lane must dispatch through the tier runner so the gate log carries fast-gate markers");
+  assert.doesNotMatch(pkg.scripts["test:unit"], /--lane unit/, "a bare node --test over the lane emits no markers — that was the UNKNOWN-coverage defect");
   assert.match(pkg.scripts["test:live"], /--test-concurrency=4.*--lane server/);
   // The browser tier is no longer a `--test-concurrency` invocation of its own: it runs through the
   // shard runner, which asks the classifier for the browser lane and refuses a queue that does not

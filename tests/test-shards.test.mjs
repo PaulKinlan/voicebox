@@ -137,8 +137,12 @@ test("the full gate runs every test file exactly once, and the fast gate's set i
   assert.match(read("scripts", "gate-tier.mjs"), /classify\(\)/, "the tier runner must take its lanes from the classifier");
 
   // Both stages take their file list from the ONE classifier — no hand-kept list that can rot, and
-  // no second definition of "the fast gate's files" that merely happens to agree today.
-  assert.match(pkg.scripts["test:unit"], /test-lanes\.mjs --lane unit/, "the fast gate must take its files from the unit lane");
+  // no second definition of "the fast gate's files" that merely happens to agree today. The fast gate
+  // reaches the classifier THROUGH the tier runner as well (voicebox-beads-qgg6): a bare `node --test`
+  // over the lane emitted none of the `fast-gate:` markers the fleet's coverage receipt reads, so the
+  // fast verdict could not say what it measured — the runner above is what fixes that, and it is the
+  // same code path, at the same width, that this full gate's unit stage already takes.
+  assert.match(pkg.scripts["test:unit"], /gate-tier\.mjs --tier unit/, "the fast gate must dispatch the unit lane through the tier runner, which takes its files from the classifier");
   assert.match(pkg.scripts["test:live"], /test-lanes\.mjs --lane server/, "the live stage must take its server files from the server lane");
   assert.match(pkg.scripts["test:live"], /browser-shard-runner\.mjs/, "the live stage must run the browser tier through its shard runner");
 

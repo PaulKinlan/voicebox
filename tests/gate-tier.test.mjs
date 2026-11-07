@@ -52,8 +52,10 @@ test("the tier roster IS the classifier's lanes — every classified file, in th
 });
 
 test("the workers are the concurrency the gate already ran at, so per-file dispatch is not a speed claim", () => {
-  // `npm run test:unit` is one `node --test` over the unit lane (node's default file concurrency is
-  // availableParallelism - 1) and `npm run test:live` passes --test-concurrency=4 to the server lane.
+  // The unit lane runs at node's default file concurrency (availableParallelism - 1) and `npm run test:live`
+  // passes --test-concurrency=4 to the server lane. `npm run test:unit` reaches this value through the tier
+  // runner (voicebox-beads-qgg6, so the fast gate's log carries its per-file markers) at the SAME width the
+  // bare `node --test` it replaced used — measured 2026-11-07: tier 15.8s, bare runner 17-21s for the lane.
   // ONE OWNER (scripts/test-shards.mjs): the fast gate reads this same value, so a scoped run cannot be
   // more serial than the tier it is a strict subset of (voicebox-beads-buy8).
   assert.equal(TIER_WORKERS.unit, Math.max(1, os.availableParallelism() - 1));

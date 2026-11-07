@@ -17,6 +17,12 @@ Voicebox enforces a multi-stage verification gate on `git push` via `.githooks/p
 
 ---
 
+## 1a. One Unit-Lane Runner for the Hook and the Fleet Gate (`voicebox-beads-qgg6`)
+
+`npm run test:unit` dispatches the unit lane through `scripts/gate-tier.mjs --tier unit` — the same per-file runner `scripts/pre-push.sh` uses for that lane — rather than one bare `node --test` over the selected files. The reason is the fleet's coverage receipt: `fleet-check --fast` runs exactly `npm run test:unit`, and the hub's `check-coverage.py` reads the gate LOG for `fast-gate: passed: <file>` lines (the vocabulary `scripts/gate-manifest.mjs` owns) to decide whether a PASS demonstrated anything. A bare runner emits none of those lines, so every fast verdict in this repository reported `coverage UNKNOWN … N changed file(s) NOT demonstrated to be exercised` while the log plainly showed 1000+ tests executing. The dispatcher emits one `passed:`/`failed:`/`unknown:` marker per file, writes the tier record, names a wedged file instead of hanging the lane, and keeps node's own file concurrency, so the hook, the fast gate and the reviewer's quoted verdict all describe the same run. Measured on an 8-CPU box 2026-11-07: tier 15.8s for the 125-file unit lane against 17-21s for the bare runner it replaced — the dispatch is not a speed cost.
+
+---
+
 ## 2. Gate Stages & Timeouts
 
 | Stage | Command | Execution Mode | Default Timeout |
