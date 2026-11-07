@@ -926,7 +926,11 @@
           </fieldset>
           <fieldset class="settings-group" id="settings-api-keys">
             <legend>Provider API Keys</legend>
-            <p class="device-state" id="api-keys-hint">Stored locally on this host so you do not need shell environment variables.</p>
+            <p class="device-state" id="api-keys-hint">Stored locally on this host. Saving requires the host token from this host's .host-token file.</p>
+            <div class="device-row">
+              <label for="api-keys-host-token">Host token</label>
+              <input type="password" id="api-keys-host-token" class="setting-input" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="api-keys-hint">
+            </div>
             <div class="device-row">
               <h3 id="api-key-gemini-label">Gemini API Key</h3>
               <input type="password" id="api-key-gemini" class="setting-input" aria-labelledby="api-key-gemini-label" placeholder="AIza..." autocomplete="off" spellcheck="false">

@@ -18,7 +18,7 @@ class FakeElement {
   append(child) { (this.children ??= []).push(child); }
 }
 
-const names = ["settings", "settingsOpen", "apiKeysSave", "apiKeysStatus", "apiKeyGemini", "apiKeyOpenai", "apiKeyAnthropic", "apiKeyGeminiStatus", "apiKeyOpenaiStatus", "apiKeyAnthropicStatus"];
+const names = ["settings", "settingsOpen", "apiKeysSave", "apiKeysStatus", "apiKeysHostToken", "apiKeyGemini", "apiKeyOpenai", "apiKeyAnthropic", "apiKeyGeminiStatus", "apiKeyOpenaiStatus", "apiKeyAnthropicStatus"];
 const domIds = ["agent-provider-state", "agent-model-state", "agent-voice-state", "agent-timbre-state", "agent-personality-state", "agent-custom-instruction-state", "agent-provider", "agent-model", "agent-voice", "agent-timbre", "agent-personality", "agent-custom-instruction", "agent-base", "agent-base-note"];
 
 function setup(t, { stored = null, active = false } = {}) {
@@ -34,7 +34,7 @@ function setup(t, { stored = null, active = false } = {}) {
     createElement: (tag) => new FakeElement(tag) };
   const calls = [];
   const dummy = "DUMMY-NOT-A-REAL-KEY-012345";
-  const slots = { gemini: { configured: true, masked: "****345" }, openai: false, anthropic: false };
+  const slots = { gemini: { configured: true }, openai: false, anthropic: false };
   let failSave = false;
   globalThis.fetch = async (url, options = {}) => {
     calls.push([url, options]);
@@ -79,7 +79,7 @@ test("settings init installs one open/close path, preserves boot PUT and keeps k
   assert.equal(h.requests.length, 1, "exactly one boot local-setting PUT");
   assert.equal(h.requests[0][1].method, "PUT");
   await h.ui.loadApiKeysSettings();
-  assert.equal(h.els.apiKeyGemini.placeholder, "Saved (****345) — paste to replace");
+  assert.equal(h.els.apiKeyGemini.placeholder, "Saved — paste a new key to replace");
   await h.els.settingsOpen.dispatch("click");
   assert.equal(h.els.settings.open, true);
   assert.equal(h.els.settingsOpen.attributes.get("aria-expanded"), "true");
@@ -92,9 +92,16 @@ test("settings init installs one open/close path, preserves boot PUT and keeps k
   h.els.apiKeyGemini.value = h.dummy;
   h.els.apiKeyOpenai.value = "  ";
   await h.els.apiKeysSave.dispatch("click");
+  assert.match(h.els.apiKeysStatus.textContent, /Enter the host token/);
+  assert.equal(h.els.apiKeysHostToken.focused, true);
+  assert.equal(h.calls.filter(([url, options]) => url === "/api/keys" && options.method === "PUT").length, 0);
+  h.els.apiKeysHostToken.value = "test-host-token";
+  await h.els.apiKeysSave.dispatch("click");
   const saved = h.calls.filter(([url, options]) => url === "/api/keys" && options.method === "PUT");
   assert.equal(saved.length, 1);
   assert.deepEqual(JSON.parse(saved[0][1].body), { gemini: h.dummy });
+  assert.equal(saved[0][1].headers["x-voicebox-host-token"], "test-host-token");
+  assert.equal(h.els.apiKeysHostToken.value, "", "host token must not persist in the form");
   assert.equal(h.els.apiKeyGemini.value, "");
   assert.equal(h.els.apiKeysSave.disabled, false);
   assert.equal(h.health, 1);
@@ -103,6 +110,7 @@ test("settings init installs one open/close path, preserves boot PUT and keeps k
   assert.equal(h.writes.some(([, value]) => value.includes(h.dummy)), false);
 
   h.setFailSave(true);
+  h.els.apiKeysHostToken.value = "test-host-token";
   h.els.apiKeyGemini.value = h.dummy;
   await h.els.apiKeysSave.dispatch("click");
   assert.match(h.els.apiKeysStatus.textContent, /Could not save API keys/);

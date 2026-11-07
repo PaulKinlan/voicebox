@@ -50,6 +50,17 @@ import { tableMembers } from "./lib/route-table.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = readFileSync(path.join(root, "server.mjs"), "utf8");
 
+// A JSON-only decision lets any browser caller write keys into process.env. Pin the
+// stronger authority at the route seam, not only in an integration test.
+test("PUT /api/keys requires host authority before reading or writing keys", () => {
+  const start = source.indexOf('"PUT /api/keys":');
+  const end = source.indexOf('"GET /api/agent-settings":', start);
+  assert.ok(start > -1 && end > start, "key route must remain in the host table");
+  const handler = source.slice(start, end);
+  assert.match(handler, /hostTokenOk\(req\.headers\["x-voicebox-host-token"\]\)/);
+  assert.ok(handler.indexOf("hostTokenOk(") < handler.indexOf("readJsonBody("), "reject unauthorised bodies before parsing");
+});
+
 // A new mutating route of ANY verb needs an explicit decision here, even if it plans to use the JSON door: the
 // reviewer must see the reason. The four csrf keys are also asserted against the host guard, and `authority` keys
 // (`PATCH /api/agents/<param>`, `DELETE /api/environments/<param>`) are the routes that match their path into a
@@ -76,9 +87,9 @@ const decisions = new Map([
   ["POST /api/execute", "json"],
   // voicebox-beads-cegk: the eight non-POST mutating routes that existed when the seam learned the other verbs.
   // Six were invisible because the scan looked for POST; two more name their path in a `url.pathname.match`
-  // variable. All eight are gated today (readJson/readJsonBody, hostTokenOk or hasExtensionAuthority) — the
+  // variable. All eight need an explicit decision (readJson/readJsonBody, hostTokenOk or hasExtensionAuthority) — the
   // decisions are here so that a NEW one cannot arrive without one.
-  ["PUT /api/keys", "json"],
+  ["PUT /api/keys", "host-token"],
   ["PUT /api/agent-settings", "json"],
   ["DELETE /api/root", "host-token"],
   ["PUT /api/mini-apps", "json"],

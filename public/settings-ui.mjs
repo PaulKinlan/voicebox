@@ -1,4 +1,4 @@
-// Settings dialog, agent preferences and masked provider-key controls.
+// Settings dialog, agent preferences and provider-key controls.
 // The host owns audio device routing, theme, root facts and shared dialog dismissal.
 export function initSettingsUi({ els, request, health, refreshDevices, on }) {
   // ── Provider API keys configuration (voicebox-beads-5drl) ─────────────────
@@ -35,8 +35,7 @@ export function initSettingsUi({ els, request, health, refreshDevices, on }) {
         const isConfigured = text.startsWith("Configured");
         if (statusEl) statusEl.textContent = text;
         if (inputEl && isConfigured && !inputEl.value) {
-          const masked = typeof slot === "object" && typeof slot.masked === "string" ? slot.masked : "";
-          inputEl.placeholder = masked ? `Saved (${masked}) — paste to replace` : "Saved — paste a new key to replace";
+          inputEl.placeholder = "Saved — paste a new key to replace";
         }
       }
     } catch {
@@ -56,12 +55,18 @@ export function initSettingsUi({ els, request, health, refreshDevices, on }) {
       if (els.apiKeysStatus) els.apiKeysStatus.textContent = "Paste at least one API key before saving.";
       return;
     }
+    const hostToken = (els.apiKeysHostToken?.value ?? "").trim();
+    if (!hostToken) {
+      if (els.apiKeysStatus) els.apiKeysStatus.textContent = "Enter the host token before saving API keys.";
+      els.apiKeysHostToken?.focus();
+      return;
+    }
     if (els.apiKeysSave) els.apiKeysSave.disabled = true;
     if (els.apiKeysStatus) els.apiKeysStatus.textContent = "Saving API keys…";
     try {
       const res = await fetch("/api/keys", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-voicebox-host-token": hostToken },
         body: JSON.stringify(payload),
       });
       const body = await res.json().catch(() => ({}));
@@ -78,6 +83,7 @@ export function initSettingsUi({ els, request, health, refreshDevices, on }) {
     } catch (err) {
       if (els.apiKeysStatus) els.apiKeysStatus.textContent = `Could not save API keys (${err?.message ?? String(err)}).`;
     } finally {
+      if (els.apiKeysHostToken) els.apiKeysHostToken.value = "";
       if (els.apiKeysSave) els.apiKeysSave.disabled = false;
     }
   });
