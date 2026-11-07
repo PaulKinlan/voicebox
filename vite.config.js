@@ -212,19 +212,25 @@ function buildStamp() {
   };
 }
 
-// CSWSH PROTECTION ON THE DEV FRONT (docs/13, voicebox-beads-efc6).
+// ONE ENTITLEMENT RULE FOR EVERY HOP OF THE DEV FRONT (docs/13, voicebox-beads-efc6, voicebox-beads-pdr6).
 //
-// The API entitles "the local page" on /live and /channel by its Origin (matching loopback).
-// A browser on this dev front connects with `Origin: http://localhost:5173` (or 127.0.0.1:5173).
-// If the proxy unconditionally rewrote Origin to API_TARGET for all callers, a hostile webpage
-// (e.g. Origin: http://evil.com) connecting to ws://localhost:5173 would have its origin laundered
-// into API_TARGET and be admitted without credentials.
+// The API entitles "the local page" by its Origin (matching loopback), and that entitlement is what
+// hasExtensionAuthority() rule 3 reads: a request carrying this server's own page Origin is treated as the
+// room's act (branch landing, extension revoke/admit/approve, agents PATCH, environments DELETE,
+// tasks/delegate, /api/call — 16 call sites). A browser on this dev front sends `Origin: http://localhost:5173`.
 //
-// So we only rewrite Origin to API_TARGET when the request genuinely originates from this dev front:
-// the Origin host must match the addressed Host header, and must be loopback or an allowed tailnet host.
-// Any non-dev-front or cross-origin connection retains its untrusted origin (or a sentinel if it
-// falsely claimed loopback without matching Host), so server.mjs rejects it with WS 1008 unless it
-// presents a valid pairing bearer in hello.
+// If a proxy hop rewrote Origin to API_TARGET for every caller, a hostile webpage (Origin:
+// http://evil.com) reaching ws://localhost:5173 — or POSTing to http://localhost:5173/api/... — would
+// have its origin laundered into API_TARGET and be entitled without credentials. The WS hops refused
+// that from voicebox-beads-efc6; the /api hop kept rewriting unconditionally until voicebox-beads-pdr6,
+// so through the dev front a hostile Origin got 404 the route's own answer where a direct call got
+// 403 host-token-required — the authority had been granted.
+//
+// So every hop rewrites Origin to API_TARGET only when the request genuinely originates from this dev
+// front: the Origin host must match the addressed Host header, and must be loopback or an allowed tailnet
+// host. Anything else retains its untrusted Origin (or a sentinel if it falsely claimed loopback without
+// matching Host), so server.mjs refuses it with 403 (HTTP) or WS 1008 (sockets) unless it presents a
+// host token or a valid pairing bearer.
 function isDevFrontOrigin(originStr, hostStr) {
   if (typeof originStr !== "string" || typeof hostStr !== "string") return false;
   let url;
@@ -243,7 +249,13 @@ function isDevFrontOrigin(originStr, hostStr) {
   return isLoopback || isTailnet;
 }
 
-function forwardDevFrontWsOrigin(proxyReq, req) {
+/**
+ * The entitlement rewrite, shared by the /api hop and the WebSocket hops (`/live`, `/channel`) so the three
+ * hops cannot disagree about who is the dev front (voicebox-beads-pdr6). A caller that does not prove it is
+ * this front keeps its own Origin; the server's own `hasExtensionAuthority` rule then answers, exactly as it
+ * would for a direct call, instead of answering a manufactured one.
+ */
+function forwardDevFrontOrigin(proxyReq, req) {
   if (isDevFrontOrigin(req?.headers?.origin, req?.headers?.host)) {
     proxyReq.setHeader("origin", API_TARGET);
   } else if (req?.headers?.origin) {
@@ -259,7 +271,7 @@ function forwardDevFrontWsOrigin(proxyReq, req) {
   }
 }
 
-export { isDevFrontOrigin };
+export { isDevFrontOrigin, forwardDevFrontOrigin };
 export default defineConfig({
   resolve: {
     alias: {
@@ -322,7 +334,12 @@ export default defineConfig({
             } else {
               proxyReq.removeHeader("x-voicebox-proxied-origin");
             }
-            proxyReq.setHeader("origin", API_TARGET);
+            // AND THE ORIGIN ITSELF ONLY FOR THIS FRONT (voicebox-beads-pdr6): the unconditional
+            // `proxyReq.setHeader("origin", API_TARGET)` here was the asymmetry — the WS hops above had
+            // required the caller to prove it was the dev front since voicebox-beads-efc6, so on this hop a
+            // hostile Origin became hasExtensionAuthority's own-page Origin and the 16 authority routes
+            // ran for it. Same function, same condition, all three hops.
+            forwardDevFrontOrigin(proxyReq, req);
           });
         },
       },
@@ -345,14 +362,15 @@ export default defineConfig({
       // Rewriting it here is the honest place: Vite IS this server's dev front on
       // the same machine, and a proxy hop terminating its own origin is what a proxy
       // is for. We only rewrite when the incoming Origin matches this dev front
-      // (forwardDevFrontWsOrigin), so external cross-origin pages cannot launder
+      // (forwardDevFrontOrigin, shared with the /api hop since voicebox-beads-pdr6), so external
+      // cross-origin pages cannot launder
       // their Origin into a local-page entitlement (voicebox-beads-efc6).
       "/live": {
         target: API_TARGET,
         ws: true,
         configure: (proxy) => {
           proxy.on("proxyReqWs", (proxyReq, req) => {
-            forwardDevFrontWsOrigin(proxyReq, req);
+            forwardDevFrontOrigin(proxyReq, req);
           });
         },
       },
@@ -376,7 +394,7 @@ export default defineConfig({
         ws: true,
         configure: (proxy) => {
           proxy.on("proxyReqWs", (proxyReq, req) => {
-            forwardDevFrontWsOrigin(proxyReq, req);
+            forwardDevFrontOrigin(proxyReq, req);
           });
         },
       },
