@@ -17,7 +17,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { auditFileName } from "../core/audit.ts";
 import { outcomeFor, reduceTask } from "../core/tasks.ts";
 import { createTaskHost } from "../lib/tasks.mjs";
-import { until } from "./lib/task-fixture.mjs";
+import { until } from "./lib/poll.mjs";
 
 const environment = "env_0123456789abcdef";
 

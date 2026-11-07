@@ -20,6 +20,7 @@ import { readJsonlFile } from "./lib/jsonl.mjs";
 import { reduceTask } from "../core/tasks.ts";
 import { createTaskHost } from "../lib/tasks.mjs";
 import { createCodexExecutor } from "../lib/cli-harness-executor.mjs";
+import { until } from "./lib/poll.mjs";
 
 // Synthetic — matches redactSecrets' sk- pattern, never a real key.
 const CANARY = "sk-canary0000000000000000000000";
@@ -139,7 +140,6 @@ console.error("stderr mentions ${CANARY} plainly");
 // ── 5lzv: the dormant browser task host gets the same boundary, and console.source is normalized ──
 
 import { createBrowserTaskHost } from "../lib/task-placement.mjs";
-import { until } from "./lib/task-fixture.mjs";
 
 test("the (unwired) browser task host scrubs the terminal answer at ITS durable boundary", async () => {
   // The browser host is not wired into the served app today (only its tests import it); the

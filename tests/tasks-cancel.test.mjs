@@ -7,7 +7,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { auditFileName } from "../core/audit.ts";
 import { createTaskHost } from "../lib/tasks.mjs";
-import { until } from "./lib/task-fixture.mjs";
+import { until } from "./lib/poll.mjs";
 
 const environment = "env_0123456789abcdef";
 const runner = (run, deadlineMs = 2000) => ({ check: () => ({ ok: true, mechanism: "closed-no-effects-unit-fixture", bounds: { deadlineMs, maxOutputBytes: 4096 } }), run });

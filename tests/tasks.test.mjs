@@ -9,7 +9,7 @@ import { auditFileName } from "../core/audit.ts";
 import { reduceTask, taskInput } from "../core/tasks.ts";
 import { createTaskHost } from "../lib/tasks.mjs";
 import { TaskInterrupted } from "../lib/task-interrupted.mjs";
-import { until } from "./lib/task-fixture.mjs";
+import { until } from "./lib/poll.mjs";
 
 const environment = "env_0123456789abcdef";
 function fixture(t, implementation) {
