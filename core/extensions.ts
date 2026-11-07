@@ -25,7 +25,16 @@ export type Bounds = {
   hosts?: string[]; // network: exactly which hosts, checked at admit AND at call
   maxRequests?: number; // network: the request budget, counted by the host at call
   maxBytes?: number; // write: the per-call write budget
+  // network: exactly which environment variables a header may interpolate. A descriptor may
+  // declare a header value `"$NAME"`, which the host resolves from its own environment — so the
+  // reachable set is the process's secrets unless the descriptor names what it reads
+  // (TM-EXT-004). Naming is the same declaration bounds.hosts makes about reach, and it is what
+  // the admission plan shows a person before they approve: WHICH secrets, not just where they go.
+  credentials?: string[];
 };
+
+/** An interpolated credential names ONE environment variable — no expression, no composite value. */
+const CREDENTIAL_NAME = /^[A-Z][A-Z0-9_]*$/;
 
 /**
  * The closed set of primitives (docs/06 §1.4(2)): `execute` is code and a
@@ -234,6 +243,33 @@ export function admit(
     };
   }
 
+  // THE DECLARED READ (TM-EXT-004): a header may interpolate only a variable the descriptor
+  // names in bounds.credentials. Without this the set a tool can read is "whatever this process
+  // holds" — the host's live provider key included — and the only thing standing between a
+  // declared host and that key would be a human reading the descriptor closely enough to notice
+  // a header name. Declared, checked by name here, and enforced again at the read itself.
+  const declaredCredentials = descriptor.bounds?.credentials ?? [];
+  if (!Array.isArray(declaredCredentials)) {
+    return {
+      decision: "refused",
+      rule: "bad-credential-name",
+      why: `bounds.credentials must be an array of environment-variable names, received ${typeof declaredCredentials} — a credential is one variable, named exactly`,
+      gets: [],
+      cannotHave,
+    };
+  }
+  for (const name of declaredCredentials) {
+    if (typeof name !== "string" || !CREDENTIAL_NAME.test(name)) {
+      return {
+        decision: "refused",
+        rule: "bad-credential-name",
+        why: `bounds.credentials names '${name}', which is not an environment variable name (/^[A-Z][A-Z0-9_]*$/) — a credential is one variable, named exactly`,
+        gets: [],
+        cannotHave,
+      };
+    }
+  }
+
   const wantsNetwork = caps.includes("network");
   if (wantsNetwork && (!descriptor.bounds?.hosts || descriptor.bounds.hosts.length === 0 || !descriptor.bounds?.maxRequests)) {
     return {
@@ -275,6 +311,32 @@ export function admit(
         gets: [],
         cannotHave,
       };
+    }
+    // A header value `"$NAME"` reads the host's environment, so the descriptor must name it.
+    const headers = (tool.params as Record<string, unknown> | undefined)?.headers;
+    if (headers && typeof headers === "object" && !Array.isArray(headers)) {
+      for (const [headerName, rawValue] of Object.entries(headers)) {
+        if (typeof rawValue !== "string" || !rawValue.startsWith("$")) continue;
+        const name = rawValue.slice(1);
+        if (!CREDENTIAL_NAME.test(name)) {
+          return {
+            decision: "refused",
+            rule: "bad-credential-name",
+            why: `tool '${tool.name}' header '${headerName}' interpolates '${rawValue}' — an interpolated credential is '$VAR', naming one environment variable (/^[A-Z][A-Z0-9_]*$/)`,
+            gets: [],
+            cannotHave,
+          };
+        }
+        if (!declaredCredentials.includes(name)) {
+          return {
+            decision: "refused",
+            rule: "undeclared-credential",
+            why: `tool '${tool.name}' header '${headerName}' interpolates $${name}, which bounds.credentials does not name${declaredCredentials.length > 0 ? ` (it names [${declaredCredentials.join(", ")}])` : " (it names nothing)"} — a header may read only the variables the descriptor declares`,
+            gets: [],
+            cannotHave,
+          };
+        }
+      }
     }
     if (tool.primitive === "wasm") {
       // The asset class (voicebox-beads-qph): a wasm tool without its digest is a module nobody
@@ -328,6 +390,11 @@ export function admit(
     }
     enforced[cap] = mechanism;
     gets.push(`${cap}: ${GETS[cap]}`);
+  }
+  if (declaredCredentials.length > 0) {
+    // Named in the disclosure beside the mechanisms, because the person approving is deciding
+    // about WHICH secrets this reaches, not only which hosts (TM-EXT-004).
+    gets.push(`credentials: ${declaredCredentials.join(", ")} — resolved from the host's environment at call time and sent only in the headers that name them; every other variable in the host's environment is unreadable to this extension`);
   }
 
   return { decision: "admitted", enforced, gets, cannotHave };
