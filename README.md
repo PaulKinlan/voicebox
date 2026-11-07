@@ -340,7 +340,7 @@ See [`docs/README.md`](docs/README.md) for the complete guide to Voicebox's arch
 
 ### Verification & Quality Gates
 - **Scoped Tests (`npm run test:changed`)**: Runs only the unit and integration tests covering files modified since `origin/main`.
-- **Unit Test Suite (`npm run test:unit`)**: Runs the fast concurrent unit test suite across `core/`, `lib/`, and `browser/`.
+- **Unit Test Suite (`npm run test:unit`)**: Runs the fast unit test suite across `core/`, `lib/`, and `browser/` via `scripts/test-unit.mjs`: the files named in `ISOLATED` (`scripts/test-shards.mjs`) run one at a time, everything else in a pool of file-per-child runs, and one `fast-gate:` marker is printed per file.
 - **Full Test Suite (`npm test`)**: Runs the unit suite, server integration tests, and browser CDP tests. The phantom-turn browser guard waits for the app's actual submit listener before asserting zero page-load turns, then requires exactly one user-submitted `/api/turn` request through network and host ingress; a blocked-module control proves the guard cannot pass on an unwired form.
 - **Acceptance Harness (`npm run accept`)**: Verifies the live served application end-to-end in headless Chromium.
 - **Documentation Sync (`npm run docs:write` / `npm run docs:check`)**: Regenerates and verifies the live-probed documentation blocks in `README.md` and `docs/07-architecture.md`.

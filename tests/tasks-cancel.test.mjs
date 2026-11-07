@@ -7,8 +7,16 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { auditFileName } from "../core/audit.ts";
 import { createTaskHost } from "../lib/tasks.mjs";
+import { until } from "./lib/poll.mjs";
 
 const environment = "env_0123456789abcdef";
+// THE EXECUTOR'S OWN DEADLINE IS ALSO A WALL CLOCK (voicebox-beads-u32a). It is 2s by default, and every arm below
+// first waits for the task to be RECORDED running — which on a loaded box is a status read that can itself take
+// seconds. When the deadline expired before the cancel arrived, the task had already settled and `cancel_task`
+// answered a refusal, so `answer.observed` was undefined and the arm failed on "the executor settled within the
+// grace window" — a verdict about the clock, not about the cancel path. The arms that cancel before they read
+// anything therefore give the executor a bound no read can reach, so what they measure is the cancel.
+const CANCEL_ARM_DEADLINE_MS = 30_000;
 const runner = (run, deadlineMs = 2000) => ({ check: () => ({ ok: true, mechanism: "closed-no-effects-unit-fixture", bounds: { deadlineMs, maxOutputBytes: 4096 } }), run });
 function fixture(t, implementation) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-cancel-")));
@@ -24,15 +32,6 @@ function fixture(t, implementation) {
   const cancel = (address, auth = authority, graceMs = 2000) => host.call("cancel_task", { address }, auth, graceMs);
   return { dir, host, entries, authority, admit, status, cancel, select: (v) => { selected = v; } };
 }
-async function until(read, predicate, timeoutMs = 4000) {
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end) {
-    const value = read();
-    if (predicate(value)) return value;
-    await delay(5);
-  }
-  assert.fail(`condition did not occur: ${JSON.stringify(read())}`);
-}
 
 test("cancel: the person's stop is requested, the executor observes it, and cancelled is RECORDED — not assumed", async (t) => {
   let sawSignal = false;
@@ -41,7 +40,7 @@ test("cancel: the person's stop is requested, the executor observes it, and canc
       sawSignal = true;
       reject(Object.assign(new Error("the person asked to stop"), { refused: "task-cancelled" }));
     });
-  })));
+  }), CANCEL_ARM_DEADLINE_MS));
   const { task } = f.admit();
   await until(() => f.status(task.address), (s) => s.task?.state === "running");
   const answer = await f.cancel(task.address);
@@ -54,7 +53,19 @@ test("cancel: the person's stop is requested, the executor observes it, and canc
 });
 
 test("cancel: an executor that finishes the work anyway records COMPLETED — the record says what happened, not what was asked", async (t) => {
-  const f = fixture(t, runner(async () => { await delay(150); return "already done"; }));
+  // GATED ON THE CANCEL, NOT ON A CLOCK (voicebox-beads-u32a). This arm used to be `await delay(150)`, i.e. it
+  // relied on the executor still running when the cancel arrived — and on a loaded box a single status read costs
+  // more than 150ms, so the task had already COMPLETED before the cancel was issued and the cancel was refused
+  // (`observed` undefined). The claim under test is "the record says what happened, not what was asked", so the
+  // executor now waits for the cancel request itself and then returns normally, which is that claim and nothing
+  // about the box.
+  const f = fixture(t, runner(async ({ signal }) => {
+    await new Promise((resolve) => {
+      if (signal.aborted) resolve();
+      else signal.addEventListener("abort", resolve, { once: true });
+    });
+    return "already done";
+  }, CANCEL_ARM_DEADLINE_MS));
   const { task } = f.admit();
   await until(() => f.status(task.address), (s) => s.task?.state === "running");
   const answer = await f.cancel(task.address, f.authority, 2000);
@@ -65,11 +76,18 @@ test("cancel: an executor that finishes the work anyway records COMPLETED — th
 });
 
 test("cancel with an executor that ignores the signal: cancel_unconfirmed with the reason, capacity still charged, never a fabricated cancelled", async (t) => {
+  // IT CANNOT SETTLE BEFORE THIS TEST SAYS SO (voicebox-beads-u32a). `await delay(5000)` was only "longer than the
+  // grace" while the box was fast enough for the arm to reach the cancel inside 5s; a slow status read inverted that
+  // and the executor settled first, so the arm measured the box instead of the refusal. A promise the test releases
+  // AFTER the assertions makes "outlives any grace" a fact rather than a race.
+  let releaseHeld;
+  const held = new Promise((resolve) => { releaseHeld = resolve; });
+  t.after(() => releaseHeld());
   const f = fixture(t, runner(async ({ signal }) => {
     signal.addEventListener("abort", () => {}); // pretends to listen, never settles early
-    await delay(5000); // outlives any grace the host applies
+    await held;
     return "too late";
-  }, 8000));
+  }, CANCEL_ARM_DEADLINE_MS));
   const { task } = f.admit();
   await until(() => f.status(task.address), (s) => s.task?.state === "running");
   const answer = await f.cancel(task.address, f.authority, 400); // short grace
@@ -79,11 +97,10 @@ test("cancel with an executor that ignores the signal: cancel_unconfirmed with t
   assert.match(final.task.reason ?? "", /did not observe cancellation|unknown/i);
   // the durable prior state is not overwritten by an invented cancelled
   assert.equal(f.entries().at(-1).task.state, "cancel_unconfirmed");
-  t.after(() => {});
 });
 
 test("cancel: a person's stop asked while the executor finishes successfully anyway records COMPLETED, not cancelled", async (t) => {
-  const f = fixture(t, runner(async () => { await delay(150); return "already done"; }));
+  const f = fixture(t, runner(async () => { await delay(150); return "already done"; }, CANCEL_ARM_DEADLINE_MS));
   const { task } = f.admit();
   await until(() => f.status(task.address), (s) => s.task?.state === "running");
   const answer = await f.cancel(task.address, f.authority, 2000);

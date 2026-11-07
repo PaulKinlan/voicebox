@@ -27,9 +27,10 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
  * ONE OWNER (voicebox-beads-buy8). These counts used to live in `scripts/gate-tier.mjs`, which was the
  * full gate's dispatcher, and the fast gate (`scripts/test-changed.mjs --gate`) carried its own default of
  * 2 — a number no tier has ever run at. The two dispatchers run the SAME lanes, so a tier's concurrency is
- * one fact and it is this one: `npm run test:unit` is one `node --test` over the unit lane (default
- * concurrency = availableParallelism - 1) and `npm run test:live` passes `--test-concurrency=4` to the
- * server lane, while the browser tier is `tools/browser-shard-runner.mjs`'s two shards. Nothing here
+ * one fact and it is this one: `npm run test:unit` runs the unit lane through `scripts/test-unit.mjs` at
+ * `availableParallelism - 1` file-per-child workers (and the files here that are ISOLATED one at a time)
+ * and `npm run test:live` passes `--test-concurrency=4` to the server lane, while the browser tier is
+ * `tools/browser-shard-runner.mjs`'s two shards. Nothing here
  * raises a lane's concurrency above what the full gate already runs: the point is that a scoped run may not
  * be MORE serial than the gate it is a strict subset of. Measured on the fast gate's own 159-file fused.js
  * scope (2026-10-14): the accidental 2-worker default cost 273s of wall clock where the tier's own
@@ -253,6 +254,18 @@ export const ISOLATED = new Set([
   // passed 7/7 standalone on the same tree, including once with six CPU burners beside it. Running it alone
   // gives it the box it was measured on, which is the same reason ldxa-barge-in and live-openai are here.
   "tests/tasks-browser.test.mjs",
+  // 2026-11-07 (voicebox-beads-u32a): the task suites are the same shape as tasks-browser above — their arms wait
+  // for a RECORDED state while an executor settles, and their fixture windows (graceMs/deadlineMs, 2s) are
+  // machine-speed constants. Run beside each other they make each other SLOWER: measured on one tree, three of
+  // these files under node's default concurrency failed 4-7 arms at 8s, 11s, 22s, 24s and 36s, while the same
+  // files with --test-concurrency=1 passed 19/19 in 20s. `tasks-cancel` also fails one arm alone on unmodified
+  // main at loadavg ~4, which is the box, not the tree. Running them one at a time gives each the box it was
+  // measured on — the same reason the two entries above are here.
+  "tests/tasks-cancel.test.mjs",
+  "tests/task-outcome.test.mjs",
+  "tests/task-redaction.test.mjs",
+  "tests/tasks.test.mjs",
+  "tests/tasks-progress.test.mjs",
 ]);
 
 /**

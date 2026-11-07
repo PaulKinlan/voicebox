@@ -20,6 +20,7 @@ import { readJsonlFile } from "./lib/jsonl.mjs";
 import { reduceTask } from "../core/tasks.ts";
 import { createTaskHost } from "../lib/tasks.mjs";
 import { createCodexExecutor } from "../lib/cli-harness-executor.mjs";
+import { until } from "./lib/poll.mjs";
 
 // Synthetic — matches redactSecrets' sk- pattern, never a real key.
 const CANARY = "sk-canary0000000000000000000000";
@@ -46,11 +47,6 @@ function fixture(t, implementation, deadlineMs = 2000) {
   };
 }
 
-async function until(read, predicate, timeoutMs = 4000) {
-  const end = Date.now() + timeoutMs;
-  while (Date.now() < end) { const value = read(); if (predicate(value)) return value; await delay(10); }
-  assert.fail(`condition did not occur: ${JSON.stringify(read())}`);
-}
 
 function assertScrubbed({ text, view, what }) {
   assert.ok(!text.includes(CANARY), `the canary reached the durable .audit JSONL in ${what}`);
