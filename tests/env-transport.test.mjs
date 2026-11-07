@@ -380,3 +380,55 @@ describe("dotfiles and overwrite are refused by name (voicebox-beads-3dma)", () 
     });
   });
 });
+
+describe("a root reached through a symlinked ancestor exports the same files (voicebox-beads-s4l7)", () => {
+  // Review finding on voicebox-beads-3dma: the walk asked the dotfile question as
+  // `path.relative(realRoot, <unresolved path>)`. With a symlinked ancestor that relative path begins "..", which
+  // starts with a dot, so EVERY file was classified as a dotfile and the export came back EMPTY with ok:true —
+  // a silent data loss dressed as a refusal. The dotfile check must never answer a containment question.
+  it("exports identically through a symlinked ancestor, and still refuses dotfiles there", () => {
+    withScratchDir((root) => {
+      const actual = path.join(root, "actual");
+      const env = path.join(actual, "env");
+      mkdirSync(path.join(env, "src"), { recursive: true });
+      writeFileSync(path.join(env, "hello.txt"), "hi\n", "utf8");
+      writeFileSync(path.join(env, "src", "app.js"), "export const ok = true;\n", "utf8");
+      writeFileSync(path.join(env, ".env"), "SECRET=1\n", "utf8");
+      writeFileSync(path.join(env, "src", ".hidden"), "hidden\n", "utf8");
+      symlinkSync(actual, path.join(root, "alias"));
+
+      const viaAlias = exportWorkspaceBundle(path.join(root, "alias", "env"), {
+        sourceEnvironment: "env-alias",
+        sourceKind: "machine",
+      });
+      const viaReal = exportWorkspaceBundle(env, { sourceEnvironment: "env-alias", sourceKind: "machine" });
+      assert.equal(viaAlias.ok, true, JSON.stringify(viaAlias));
+      assert.deepEqual(
+        viaAlias.bundle.files.map((f) => f.path),
+        ["hello.txt", "src/app.js"],
+        "a symlinked ancestor emptied the export",
+      );
+      assert.deepEqual(viaAlias.bundle.files.map((f) => f.path), viaReal.bundle.files.map((f) => f.path));
+
+      // And the import side of the same shape: a target reached through a symlinked ancestor accepts a legitimate
+      // bundle instead of answering outside-root, while a dotfile entry is still refused there.
+      const targetAlias = path.join(root, "alias", "target");
+      mkdirSync(path.join(actual, "target"), { recursive: true });
+      const good = importWorkspaceBundle(targetAlias, viaAlias.bundle);
+      assert.equal(good.ok, true, JSON.stringify(good));
+      const dot = {
+        ...viaAlias.bundle,
+        files: [{
+          path: ".bashrc",
+          content: "pwned\n",
+          bytes: Buffer.byteLength("pwned\n", "utf8"),
+          sha256: sha256Utf8("pwned\n"),
+        }],
+      };
+      const refused = importWorkspaceBundle(targetAlias, dot, { overwrite: true });
+      assert.equal(refused.ok, false);
+      assert.equal(refused.refused, "dotfile-refused");
+      assert.equal(existsSync(path.join(actual, "target", ".bashrc")), false);
+    });
+  });
+});
