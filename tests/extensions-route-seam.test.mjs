@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createExtensionRoutes } from "../lib/routes/extensions.mjs";
 
-function fixture(body = {}, { authorized = false, runtime: overrides = {} } = {}) {
+function fixture(body = {}, { authorized = false, explicitRoom = false, runtime: overrides = {} } = {}) {
   const replies = [], caps = [], calls = [];
   const runtime = {
     inventory: () => ({ extensions: [] }),
@@ -28,6 +28,7 @@ function fixture(body = {}, { authorized = false, runtime: overrides = {} } = {}
     contentJsonBodyMaxBytes: 8 * 1024 * 1024,
     extensionRuntime: runtime,
     hasExtensionAuthority: () => authorized,
+    hasExplicitRoomAuthority: () => explicitRoom,
   });
   const request = (method, pathname, headers = {}) => routes({ method, headers }, {}, new URL(`http://localhost${pathname}`));
   return { request, replies, caps, calls };
@@ -111,13 +112,35 @@ test("approval requires JSON, a 4096-byte body door and a valid ID before asking
   await assert.rejects(routes({ method: "POST", headers: { "content-type": "application/json" } }, {}, new URL("http://localhost/api/extensions/approval-request")), (error) => error === refused);
 });
 
-test("approval chooses in-room authority only when authorized, otherwise requires the code path", async () => {
-  const room = fixture({ id: "known" }, { authorized: true });
+test("an ORIGIN-only authority claim cannot admit in room, and nothing is installed (voicebox-beads-93kz)", async () => {
+  // TM-EXT-014. `hasExtensionAuthority` is true for a bare page-Origin claim, which any local process can write on
+  // a raw socket and any same-origin page context can present. That used to be enough to run approveInRoom — i.e. to
+  // INSTALL an extension, which interpolates $ENV_VAR at run time (voicebox-beads-izu7). The room's own session
+  // token, or the host token, is now required for the in-room path.
+  const originOnly = fixture({ id: "known" }, { authorized: true, explicitRoom: false });
+  assert.equal(
+    await originOnly.request("POST", "/api/extensions/approve", { "content-type": "application/json" }),
+    true,
+  );
+  assert.deepEqual(originOnly.calls, [], "an Origin claim admitted an extension");
+  assert.equal(originOnly.replies.at(-1).status, 403);
+  assert.equal(originOnly.replies.at(-1).payload.refused, "room-session-required");
+  assert.match(originOnly.replies.at(-1).payload.why, /host token/);
+
+  // The room itself, holding its own token, still takes the in-room path.
+  const room = fixture({ id: "known" }, { explicitRoom: true });
   await room.request("POST", "/api/extensions/approve", { "content-type": "application/json", "x-voicebox-session-token": "room" });
   assert.deepEqual(room.calls, ["approveInRoom"]);
-  const untrusted = fixture({ id: "known" });
-  await untrusted.request("POST", "/api/extensions/approve", { "content-type": "application/json" });
-  assert.deepEqual(untrusted.calls, ["approveWithCode"]);
+
+  // And a console code still authorizes a specific plan without any room token.
+  const coded = fixture({ id: "known", code: "abc123", requestId: "req-1" });
+  await coded.request("POST", "/api/extensions/approve", { "content-type": "application/json" });
+  assert.deepEqual(coded.calls, ["approveWithCode"]);
+
+  // Requesting an approval code is not an installing act, so it needs no room token.
+  const ask = fixture({ id: "known" });
+  await ask.request("POST", "/api/extensions/approval-request", { "content-type": "application/json" });
+  assert.deepEqual(ask.calls, ["requestApproval"]);
 });
 
 test("authorized room can revoke with confirm-first preview; reconfigure invalid bounds never mutate", async () => {
