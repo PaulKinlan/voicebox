@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { classify } from "../scripts/test-lanes.mjs";
 import { assertExactCoverage, buildQueue, isFailed, retryableWaitTimeout, splitQueue } from "../scripts/test-shards.mjs";
 import { ISOLATED } from "../scripts/test-shards.mjs";
+import { planUnitRuns } from "../scripts/test-unit.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const read = (...parts) => readFileSync(path.join(root, ...parts), "utf8");
@@ -86,8 +87,13 @@ test("a file counts as failed when its exit code, its counts OR its reporter dis
   assert.equal(isFailed({ code: 0, tests: 1, fail: 0, skipped: 1, notOk: [] }), false, "a skipped test is not a failure");
 });
 
-test("the two phases are a PARTITION of the queue, and every isolated name is a real browser-lane file", () => {
+test("the two phases are a PARTITION of the queue, and every isolated name is a real test file in a lane", () => {
   const browserLane = lane("browser");
+  // ISOLATED spans two lanes since voicebox-beads-u32a: the browser tier's box-sensitive files, and the unit
+  // gate's task suites (which make each other slower when run beside a sibling). So the "is this name real?"
+  // half of this test now asks the classifier for both, and the "is it actually isolated?" half asks each
+  // lane's own splitter.
+  const unitLane = lane("unit");
   const queue = assertExactCoverage(browserLane, buildQueue(browserLane));
   const { parallel, isolated } = splitQueue(queue);
 
@@ -105,9 +111,19 @@ test("the two phases are a PARTITION of the queue, and every isolated name is a 
   // parallel run silently — bringing back the CPU-contention flake the isolation exists to remove —
   // and nothing else in the gate would notice.
   for (const file of ISOLATED) {
-    assert.ok(browserLane.includes(file), `${file} is listed as isolated but is not in the browser lane — a renamed or deleted test leaves the isolation silently unapplied`);
-    assert.equal(isolated.includes(file), true, `${file} is listed as isolated and must actually be isolated in the queue`);
+    const inBrowser = browserLane.includes(file);
+    const inUnit = unitLane.includes(file);
+    assert.ok(inBrowser || inUnit, `${file} is listed as isolated but is in neither the browser nor the unit lane — a renamed or deleted test leaves the isolation silently unapplied`);
+    if (inBrowser) assert.equal(isolated.includes(file), true, `${file} is listed as isolated and must actually be isolated in the browser queue`);
   }
+  // And the unit half is applied by the gate command that runs it, not by this queue: a file added to ISOLATED
+  // for the unit lane must actually come out of the unit runner's isolated phase.
+  const { alone: unitAlone, together: unitTogether } = planUnitRuns(unitLane);
+  for (const file of unitAlone) {
+    assert.equal(ISOLATED.has(file), true, `${file} runs alone in the unit gate, so it must be in ISOLATED`);
+    assert.equal(unitTogether.includes(file), false, `${file} is in both unit phases: it would run twice`);
+  }
+  assert.ok(unitAlone.length >= 5, "the task suites that voicebox-beads-u32a measured must be isolated");
 
   // SPLIT QUEUE IS PURE: a caller handing in its own set gets that set honoured, so the tests are not
   // merely re-asserting the module's own constant.
@@ -138,7 +154,8 @@ test("the full gate runs every test file exactly once, and the fast gate's set i
 
   // Both stages take their file list from the ONE classifier — no hand-kept list that can rot, and
   // no second definition of "the fast gate's files" that merely happens to agree today.
-  assert.match(pkg.scripts["test:unit"], /test-lanes\.mjs --lane unit/, "the fast gate must take its files from the unit lane");
+  assert.match(pkg.scripts["test:unit"], /scripts\/test-unit\.mjs/, "the fast gate must run the unit lane through its runner");
+  assert.match(read("scripts", "test-unit.mjs"), /classify\(\)\.unit/, "the fast gate's runner must take its files from the unit lane of the classifier");
   assert.match(pkg.scripts["test:live"], /test-lanes\.mjs --lane server/, "the live stage must take its server files from the server lane");
   assert.match(pkg.scripts["test:live"], /browser-shard-runner\.mjs/, "the live stage must run the browser tier through its shard runner");
 

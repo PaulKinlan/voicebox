@@ -81,7 +81,11 @@ test("classification detects browser/server helper launches: page-acceptance, ta
 
 test("the lane scripts exist and swap out at the same files npm test runs", () => {
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.match(pkg.scripts["test:unit"], /test-lanes\.mjs --lane unit/);
+  // The unit command is a runner, not a bare `node --test` (voicebox-beads-u32a): the runner owns the ISOLATED
+  // split and the per-file `fast-gate:` markers, and it must still take its files from the ONE classifier rather
+  // than a hand-kept list. Both halves are asserted, because either one alone is a half-truth.
+  assert.match(pkg.scripts["test:unit"], /scripts\/test-unit\.mjs/);
+  assert.match(readFileSync(path.join(root, "scripts", "test-unit.mjs"), "utf8"), /classify\(\)\.unit/, "the unit runner must take its files from the classifier's unit lane");
   assert.match(pkg.scripts["test:live"], /--test-concurrency=4.*--lane server/);
   // The browser tier is no longer a `--test-concurrency` invocation of its own: it runs through the
   // shard runner, which asks the classifier for the browser lane and refuses a queue that does not

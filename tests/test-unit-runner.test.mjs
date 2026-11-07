@@ -64,7 +64,11 @@ test("this one is red on purpose", () => { assert.equal(1, 2); });
     const collected = [];
     const printed = [];
     const originalLog = console.log;
+    // The fixtures are REAL test files, so their reporter output would otherwise land in this suite's own TAP
+    // stream and read as this file failing. Swallow it: the marker lines below are what is under test.
+    const originalWrite = process.stdout.write.bind(process.stdout);
     console.log = (...args) => { printed.push(args.join(" ")); };
+    process.stdout.write = () => true;
     let failed;
     try {
       failed = await runUnitLane(
@@ -73,6 +77,7 @@ test("this one is red on purpose", () => { assert.equal(1, 2); });
       );
     } finally {
       console.log = originalLog;
+      process.stdout.write = originalWrite;
     }
     collected.push(...printed);
     assert.equal(failed, 1, "exactly the red file counts as failed");
