@@ -10,6 +10,13 @@ import { createTaskHost } from "../lib/tasks.mjs";
 import { until } from "./lib/poll.mjs";
 
 const environment = "env_0123456789abcdef";
+// THE EXECUTOR'S OWN DEADLINE IS ALSO A WALL CLOCK (voicebox-beads-u32a). It is 2s by default, and every arm below
+// first waits for the task to be RECORDED running — which on a loaded box is a status read that can itself take
+// seconds. When the deadline expired before the cancel arrived, the task had already settled and `cancel_task`
+// answered a refusal, so `answer.observed` was undefined and the arm failed on "the executor settled within the
+// grace window" — a verdict about the clock, not about the cancel path. The arms that cancel before they read
+// anything therefore give the executor a bound no read can reach, so what they measure is the cancel.
+const CANCEL_ARM_DEADLINE_MS = 30_000;
 const runner = (run, deadlineMs = 2000) => ({ check: () => ({ ok: true, mechanism: "closed-no-effects-unit-fixture", bounds: { deadlineMs, maxOutputBytes: 4096 } }), run });
 function fixture(t, implementation) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-cancel-")));
@@ -33,7 +40,7 @@ test("cancel: the person's stop is requested, the executor observes it, and canc
       sawSignal = true;
       reject(Object.assign(new Error("the person asked to stop"), { refused: "task-cancelled" }));
     });
-  })));
+  }), CANCEL_ARM_DEADLINE_MS));
   const { task } = f.admit();
   await until(() => f.status(task.address), (s) => s.task?.state === "running");
   const answer = await f.cancel(task.address);
@@ -58,7 +65,7 @@ test("cancel: an executor that finishes the work anyway records COMPLETED — th
       else signal.addEventListener("abort", resolve, { once: true });
     });
     return "already done";
-  }));
+  }, CANCEL_ARM_DEADLINE_MS));
   const { task } = f.admit();
   await until(() => f.status(task.address), (s) => s.task?.state === "running");
   const answer = await f.cancel(task.address, f.authority, 2000);
@@ -80,7 +87,7 @@ test("cancel with an executor that ignores the signal: cancel_unconfirmed with t
     signal.addEventListener("abort", () => {}); // pretends to listen, never settles early
     await held;
     return "too late";
-  }, 8000));
+  }, CANCEL_ARM_DEADLINE_MS));
   const { task } = f.admit();
   await until(() => f.status(task.address), (s) => s.task?.state === "running");
   const answer = await f.cancel(task.address, f.authority, 400); // short grace
@@ -93,7 +100,7 @@ test("cancel with an executor that ignores the signal: cancel_unconfirmed with t
 });
 
 test("cancel: a person's stop asked while the executor finishes successfully anyway records COMPLETED, not cancelled", async (t) => {
-  const f = fixture(t, runner(async () => { await delay(150); return "already done"; }));
+  const f = fixture(t, runner(async () => { await delay(150); return "already done"; }, CANCEL_ARM_DEADLINE_MS));
   const { task } = f.admit();
   await until(() => f.status(task.address), (s) => s.task?.state === "running");
   const answer = await f.cancel(task.address, f.authority, 2000);
