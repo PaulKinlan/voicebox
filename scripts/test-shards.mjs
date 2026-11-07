@@ -253,6 +253,18 @@ export const ISOLATED = new Set([
   // passed 7/7 standalone on the same tree, including once with six CPU burners beside it. Running it alone
   // gives it the box it was measured on, which is the same reason ldxa-barge-in and live-openai are here.
   "tests/tasks-browser.test.mjs",
+  // 2026-11-07 (voicebox-beads-u32a): the task suites are the same shape as tasks-browser above — their arms wait
+  // for a RECORDED state while an executor settles, and their fixture windows (graceMs/deadlineMs, 2s) are
+  // machine-speed constants. Run beside each other they make each other SLOWER: measured on one tree, three of
+  // these files under node's default concurrency failed 4-7 arms at 8s, 11s, 22s, 24s and 36s, while the same
+  // files with --test-concurrency=1 passed 19/19 in 20s. `tasks-cancel` also fails one arm alone on unmodified
+  // main at loadavg ~4, which is the box, not the tree. Running them one at a time gives each the box it was
+  // measured on — the same reason the two entries above are here.
+  "tests/tasks-cancel.test.mjs",
+  "tests/task-outcome.test.mjs",
+  "tests/task-redaction.test.mjs",
+  "tests/tasks.test.mjs",
+  "tests/tasks-progress.test.mjs",
 ]);
 
 /**
