@@ -46,7 +46,19 @@ test("cancel: the person's stop is requested, the executor observes it, and canc
 });
 
 test("cancel: an executor that finishes the work anyway records COMPLETED — the record says what happened, not what was asked", async (t) => {
-  const f = fixture(t, runner(async () => { await delay(150); return "already done"; }));
+  // GATED ON THE CANCEL, NOT ON A CLOCK (voicebox-beads-u32a). This arm used to be `await delay(150)`, i.e. it
+  // relied on the executor still running when the cancel arrived — and on a loaded box a single status read costs
+  // more than 150ms, so the task had already COMPLETED before the cancel was issued and the cancel was refused
+  // (`observed` undefined). The claim under test is "the record says what happened, not what was asked", so the
+  // executor now waits for the cancel request itself and then returns normally, which is that claim and nothing
+  // about the box.
+  const f = fixture(t, runner(async ({ signal }) => {
+    await new Promise((resolve) => {
+      if (signal.aborted) resolve();
+      else signal.addEventListener("abort", resolve, { once: true });
+    });
+    return "already done";
+  }));
   const { task } = f.admit();
   await until(() => f.status(task.address), (s) => s.task?.state === "running");
   const answer = await f.cancel(task.address, f.authority, 2000);
@@ -57,9 +69,16 @@ test("cancel: an executor that finishes the work anyway records COMPLETED — th
 });
 
 test("cancel with an executor that ignores the signal: cancel_unconfirmed with the reason, capacity still charged, never a fabricated cancelled", async (t) => {
+  // IT CANNOT SETTLE BEFORE THIS TEST SAYS SO (voicebox-beads-u32a). `await delay(5000)` was only "longer than the
+  // grace" while the box was fast enough for the arm to reach the cancel inside 5s; a slow status read inverted that
+  // and the executor settled first, so the arm measured the box instead of the refusal. A promise the test releases
+  // AFTER the assertions makes "outlives any grace" a fact rather than a race.
+  let releaseHeld;
+  const held = new Promise((resolve) => { releaseHeld = resolve; });
+  t.after(() => releaseHeld());
   const f = fixture(t, runner(async ({ signal }) => {
     signal.addEventListener("abort", () => {}); // pretends to listen, never settles early
-    await delay(5000); // outlives any grace the host applies
+    await held;
     return "too late";
   }, 8000));
   const { task } = f.admit();
@@ -71,7 +90,6 @@ test("cancel with an executor that ignores the signal: cancel_unconfirmed with t
   assert.match(final.task.reason ?? "", /did not observe cancellation|unknown/i);
   // the durable prior state is not overwritten by an invented cancelled
   assert.equal(f.entries().at(-1).task.state, "cancel_unconfirmed");
-  t.after(() => {});
 });
 
 test("cancel: a person's stop asked while the executor finishes successfully anyway records COMPLETED, not cancelled", async (t) => {
