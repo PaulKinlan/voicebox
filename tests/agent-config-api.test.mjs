@@ -145,23 +145,30 @@ test("API: GET /api/keys, PUT /api/keys, and POST /api/harnesses/configure", asy
       assert.equal(fs.existsSync(path.join(server.extensionsDir, ".api-keys.json")), false);
     }
 
+    // Distinctive suffixes avoid false matches with model/version numbers in agentSettings.
+    const geminiSecret = "AIzaSyTestKey1234ZQ7K";
+    const openaiSecret = "sk-proj-test9876M4XP";
+    assert.doesNotMatch(JSON.stringify(getKeysBody), /ZQ7K|M4XP/, "suffix sentinels must not occur in baseline metadata");
     // Host-authorized PUT sets and persists keys without returning any suffix of them.
     const putKeysRes = await fetch(`${base}/api/keys`, {
       method: "PUT",
       headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
       body: JSON.stringify({
-        gemini: "AIzaSyTestKey1234567890",
-        openai: "sk-proj-test9876543210",
+        gemini: geminiSecret,
+        openai: openaiSecret,
       }),
     });
     assert.equal(putKeysRes.status, 200);
     const putKeysBody = await putKeysRes.json();
     assert.equal(putKeysBody.ok, true);
     assert.equal(putKeysBody.keys.gemini.configured, true);
-    assert.equal("masked" in putKeysBody.keys.gemini, false);
     assert.equal(putKeysBody.keys.openai.configured, true);
-    assert.equal("masked" in putKeysBody.keys.openai, false);
-    assert.equal("masked" in (await (await fetch(`${base}/api/keys`)).json()).keys.gemini, false, "GET must not expose key suffixes either");
+    // Assert the stored suffix cannot leak, regardless of which property carries it.
+    // A 1–3 character leak is outside this four-character regression's scope.
+    const secretSuffixes = /ZQ7K|M4XP/;
+    assert.doesNotMatch(JSON.stringify(putKeysBody), secretSuffixes, "PUT response must not expose either key suffix");
+    const getKeysAfterSave = await (await fetch(`${base}/api/keys`)).json();
+    assert.doesNotMatch(JSON.stringify(getKeysAfterSave), secretSuffixes, "GET response must not expose either key suffix");
     assert.equal(putKeysBody.keys.anthropic.configured, false);
     assert.equal(
       fs.existsSync(path.join(server.extensionsDir, ".api-keys.json")),

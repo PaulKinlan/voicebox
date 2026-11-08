@@ -22,7 +22,7 @@ The server starts at `http://localhost:8787` (bound to `127.0.0.1`; override por
 
 ### 3. Configure API Keys
 You can configure provider keys in either of two ways:
-- **In the Browser UI (Recommended)**: Click **Settings (⚙)** in the top bar, enter the host token from this host's `.host-token` file, and paste your Gemini, OpenAI, or Anthropic API key. Authorized keys are saved to the host's `0600` credential store (`GET` / `PUT /api/keys`) and take effect immediately without restarting the server. Status responses never include key suffixes.
+- **In the Browser UI (Recommended)**: Click **Settings (⚙)** in the top bar, enter the host token from this host's `.host-token` file, and paste your Gemini, OpenAI, or Anthropic API key. Authorized keys are saved to the host's `0600` credential store (`GET` / `PUT /api/keys`) and take effect immediately without restarting the server. Status responses never include key suffixes (checked against both GET and PUT payload values, not just field names).
 - **Via Environment Variables**:
   ```bash
   # Gemini Multimodal Live (default: models/gemini-3.8-live)
