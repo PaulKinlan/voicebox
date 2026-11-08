@@ -4653,6 +4653,21 @@ async function handle(req, res) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/transport/export") {
+    // THE HOST'S ACT, IN THE READ DIRECTION (voicebox-beads-c84e, TM-TRANSPORT-022). Export hands back the CONTENTS
+    // of every non-dot file under the declared machine root, so it is not a page read: a caller that can reach
+    // loopback can carry the whole tree away, and the mini-app relay is exactly such a caller. Import has taken the
+    // host token since voicebox-beads-3dma; export did not, so the asymmetry was one direction of the same door.
+    // The same authority applies, for the same reasons: an Origin header is a claim any local process can write on a
+    // raw socket, and the in-room session token is served openly in the page HTML, so neither distinguishes a local
+    // PROCESS from the person at the keyboard. Checked BEFORE the root is read, so a refusal says nothing about what
+    // this machine holds.
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, {
+        ok: false,
+        refused: "host-token-required",
+        why: "exporting a transport bundle reads the contents of the declared root — the host's act. It takes the host token (x-voicebox-host-token); the page cannot hold it, and a bare Origin header is a claim any local process can make.",
+      });
+    }
     if (!active) return json(res, 400, { ...noRootDeclared(), root: null });
     if (active.root.kind !== "machine" || !active.root.path) {
       return json(res, 400, {
