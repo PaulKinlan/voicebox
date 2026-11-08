@@ -72,6 +72,23 @@ async function driveGate({ status = "passed", ...overrides } = {}) {
   }
 }
 
+test("gate: a deletion-only test delta is empty, not an unclassified refusal or a claimed pass", async () => {
+  const deleted = "tests/jvar-deleted-fixture.test.mjs";
+  const { outcome, lines, dir } = await driveGate({
+    changedFiles: [deleted], matchedTests: [],
+    partitioned: { unit: [], server: [], browser: [], unclassified: [] },
+  });
+  try {
+    assert.equal(outcome.code, 0, "a deleted test cannot be run or refuse as unclassified");
+    assert.equal(outcome.manifest.verdict, "empty", "no-work is not a passing test verdict");
+    assert.deepEqual(outcome.manifest.changed, [deleted], "the changed-path ledger still names the deletion");
+    assert.ok(lines.some((line) => line.includes("EMPTY is not a PASS")));
+    assert.ok(!lines.some((line) => line.startsWith("fast-gate: passed:")));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("gate: every dispatched file is recorded with its own status, counts and duration", async () => {
   const { outcome, dir } = await driveGate({ status: "passed" });
   assert.equal(outcome.code, 0);
