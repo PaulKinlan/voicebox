@@ -108,13 +108,70 @@ export async function runUnitLane(files, { cwd = process.cwd(), isolated = ISOLA
   return failed;
 }
 
-function main() {
-  const files = classify().unit.map(({ file }) => `tests/${file}`);
-  const workers = Number(process.env.VOICEBOX_UNIT_WORKERS ?? os.availableParallelism() - 1);
-  runUnitLane(files, { workers }).then((failed) => process.exit(failed === 0 ? 0 : 1), (error) => {
-    console.error(`[test:unit] runner failed: ${error?.message ?? error}`);
-    process.exit(1);
-  });
+// A changed live test must not disappear behind the unit lane's green result. Only changed
+// test files are added here; source-file dependency closure belongs to the merger's full gate.
+export function selectChangedLiveTests(changedPaths, classified) {
+  const unit = new Set(classified.unit.map(({ file }) => `tests/${file}`));
+  const live = new Set(classified.live.map(({ file }) => `tests/${file}`));
+  const selected = [];
+  const unmapped = [];
+  for (const file of changedPaths) {
+    if (!/^tests\/.+\.test\.mjs$/.test(file) || unit.has(file)) continue;
+    if (live.has(file)) selected.push(file);
+    else unmapped.push(file);
+  }
+  return { selected: [...new Set(selected)].sort(), unmapped: [...new Set(unmapped)].sort() };
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main();
+/** Run changed live files serially with the scoped gate's per-file process-group deadline. */
+export async function runChangedLiveTests(files, { runFile, statusOf, budgetMs = 120_000, now = Date.now }) {
+  let failed = 0;
+  const started = now();
+  for (const file of files) {
+    const remaining = budgetMs - (now() - started);
+    if (remaining <= 0) {
+      failed += 1;
+      console.error(`[test:unit] ${file}: not run (changed-live budget ${budgetMs}ms exhausted)`);
+      console.log(emitMarker("unknown", [file]));
+      continue;
+    }
+    console.log(`[test:unit] changed live test: ${file}`);
+    const result = await runFile(file, { timeoutMs: Math.min(240_000, remaining) });
+    const status = statusOf(result);
+    if (status !== "passed") {
+      failed += 1;
+      console.error(`[test:unit] ${file}: ${status}${result.timedOut ? " (deadline exceeded)" : ""}\n${String(result.out ?? "").slice(-4000)}`);
+    }
+    console.log(emitMarker(status === "unknown" || status === "timeout" ? "unknown" : status, [file]));
+  }
+  return failed;
+}
+
+async function main() {
+  const classified = classify();
+  // Load the repository's one changed-path owner and bounded test runner rather than
+  // copying either algorithm here. The import is only paid by the CLI gate, not its unit tests.
+  const { getBaseRef, getChangedFiles, runOneFile, statusOf, killRunningChildren } = await import("./test-changed.mjs");
+  if (getBaseRef() === "HEAD") {
+    console.error(emitMarker("unknown", ["no main ref: changed live tests cannot be identified"]));
+    throw new Error("cannot prove changed-test coverage without origin/main or main");
+  }
+  const { selected, unmapped } = selectChangedLiveTests(getChangedFiles(), classified);
+  if (unmapped.length) {
+    for (const file of unmapped) console.error(emitMarker("unmapped", [file]));
+    throw new Error(`changed test file(s) have no unit or live lane: ${unmapped.join(", ")}`);
+  }
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    process.once(signal, () => { killRunningChildren("SIGKILL"); process.exit(128 + os.constants.signals[signal]); });
+  }
+  const files = classified.unit.map(({ file }) => `tests/${file}`);
+  const workers = Number(process.env.VOICEBOX_UNIT_WORKERS ?? os.availableParallelism() - 1);
+  const unitFailed = await runUnitLane(files, { workers });
+  const liveFailed = unitFailed ? 0 : await runChangedLiveTests(selected, { runFile: runOneFile, statusOf, budgetMs: Number(process.env.VOICEBOX_FAST_LIVE_SECS ?? 120) * 1000 });
+  process.exit(unitFailed || liveFailed ? 1 : 0);
+}
+
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) main().catch((error) => {
+  console.error(`[test:unit] runner failed: ${error?.message ?? error}`);
+  process.exit(1);
+});
