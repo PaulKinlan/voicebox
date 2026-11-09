@@ -644,6 +644,8 @@ Measured 2026-10-14 against the real fast-gate log for tree `7a5e9157` (`fast-ga
 | removed | `coverage: PARTIAL`, `unmapped: ["public/fused.js"]` — the reported defect |
 | one witness replaced by a suite that never ran | `coverage: PARTIAL`, `unmapped: ["public/fused.js"]`, `omitted: ["tests/a-suite-that-never-ran.test.mjs"]` |
 
+For `server.mjs` (`voicebox-beads-z284`), the contract names only unit-lane **source-seam** witnesses: the mutating-route authority inventory and two route-table wiring checks. Those suites run in the existing `npm run test:unit` fast gate without adding live-server cost. This does **not** certify HTTP behaviour. The independent oracle also discovers live tests that import the server fixture; the fast gate omits them, so a `server.mjs` change remains `coverage: PARTIAL` with the source *partially placed*, not `KNOWN`. Run focused real-server tests at handoff, and use the full live tier at landing. Do not report the unit-only contract as equivalent to running those live witnesses.
+
 ### The artifact
 
 `~/.fleet/checks/<tree>.<fast|full>.manifest.json` (override with `--manifest-dir` or

@@ -1,4 +1,9 @@
 {
+  "server.mjs": [
+    "tests/csrf-route-seam.test.mjs",
+    "tests/activity-route-seam.test.mjs",
+    "tests/agents-read-route-seam.test.mjs"
+  ],
   "public/fused.js": [
     "tests/served-vs-disk.test.mjs",
     "tests/voicebox.test.mjs",
