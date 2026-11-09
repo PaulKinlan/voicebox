@@ -80,7 +80,16 @@ test('Vite preserves legacy browser Origin as negative-only evidence before its 
   });
   assert.equal(ownPage.status, 200);
   assert.equal((await getTools(api.base)).length, 1);
-  const ownUndo = await fetch(`${front}/api/undo`, { method: 'POST', headers: { origin: front } });
+  const claimedOriginUndo = await fetch(`${front}/api/undo`, { method: 'POST', headers: { origin: front } });
+  assert.equal(claimedOriginUndo.status, 403, 'proxy-local Origin alone does not authorize undo');
+  assert.equal((await claimedOriginUndo.json()).refused, 'room-session-required');
+  assert.equal(fs.existsSync(file), true);
+  const html = await fetch(`${api.base}/`).then((response) => response.text());
+  const roomToken = html.match(/name="voicebox-session-token" content="([^"]+)"/)?.[1];
+  assert.ok(roomToken);
+  const ownUndo = await fetch(`${front}/api/undo`, {
+    method: 'POST', headers: { origin: front, 'x-voicebox-session-token': roomToken },
+  });
   assert.equal(ownUndo.status, 200);
   assert.equal(fs.existsSync(file), false);
   const ownProbe = await fetch(`${front}/api/probe`, { method: 'POST', headers: { origin: front } });

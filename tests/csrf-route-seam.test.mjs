@@ -551,6 +551,23 @@ test("every host mutation has a reviewed browser-CSRF, JSON-door, or authority d
   assertPostBoundary(source);
 });
 
+test("bodyless undo requires host or room session credentials before mutating files", () => {
+  const check = (host) => {
+    const start = host.indexOf('if (req.method === "POST" && url.pathname === "/api/undo") {');
+    assert.ok(start >= 0, "undo route must exist");
+    const handler = host.slice(start, host.indexOf("\n  }", start));
+    const hostToken = handler.indexOf('!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])');
+    const roomToken = handler.indexOf("!hasRoomSessionAuthority(req)");
+    const execute = handler.indexOf('await execute({ verb: "undo" })');
+    assert.ok(hostToken >= 0 && roomToken > hostToken && execute > roomToken,
+      "undo must check both token alternatives before executing; Origin is not authority");
+  };
+  check(source);
+  const unguarded = source.replace('!hasRoomSessionAuthority(req)) {\n      return json(res, 403', 'false) {\n      return json(res, 403');
+  assert.notEqual(unguarded, source, "the undo guard mutation must be applied");
+  assert.throws(() => check(unguarded), /undo must check both token alternatives/);
+});
+
 test("explicit file actions require host or room session credentials before the turn executor", () => {
   const check = (host) => {
     const start = host.indexOf('if (req.method === "POST" && url.pathname === "/api/turn") {');

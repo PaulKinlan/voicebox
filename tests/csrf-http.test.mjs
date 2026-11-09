@@ -33,7 +33,7 @@ async function postTools(base, appId, headers) {
 const getTools = async (base) => (await fetch(`${base}/api/mini-app/tools`).then((res) => res.json())).tools;
 
 // POST /api/undo reads no request body, so the JSON Content-Type door never sees it.
-test('a cross-site browser-simple POST cannot undo a persisted write; machine and same-origin callers can', async (t) => {
+test('a cross-site browser-simple POST cannot undo a persisted write; host and room token callers can', async (t) => {
   const { server, workspace } = await isolatedServer(t);
   const root = await fetch(`${server.base}/api/root`, {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-voicebox-host-token': server.hostToken },
@@ -59,18 +59,35 @@ test('a cross-site browser-simple POST cannot undo a persisted write; machine an
   assert.equal(fs.readFileSync(file, 'utf8'), 'keep this write\n');
   assert.equal((await fetch(`${server.base}/api/undo`).then((res) => res.json())).canUndo, true);
 
-  const machine = await fetch(`${server.base}/api/undo`, { method: 'POST' });
+  const headerless = await fetch(`${server.base}/api/undo`, { method: 'POST' });
+  assert.equal(headerless.status, 403);
+  assert.equal((await headerless.json()).refused, 'room-session-required');
+  assert.equal(fs.existsSync(file), true, 'headerless request must not undo');
+  const machine = await fetch(`${server.base}/api/undo`, {
+    method: 'POST', headers: { 'x-voicebox-host-token': server.hostToken },
+  });
   assert.equal(machine.status, 200);
   assert.equal(fs.existsSync(file), false);
 
-  // A real page's own Origin is also allowed to perform the ordinary undo action.
+  // A room session token, not the page Origin alone, authorizes the ordinary undo action.
+  const pageHtml = await fetch(`${server.base}/`).then((response) => response.text());
+  const sessionToken = pageHtml.match(/name="voicebox-session-token" content="([^"]+)"/)?.[1];
+  assert.ok(sessionToken);
   const wroteAgain = await fetch(`${server.base}/api/file`, {
     method: 'PUT', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'keep.txt', content: 'page write\n' }),
   });
   assert.equal(wroteAgain.status, 200);
-  const page = await fetch(`${server.base}/api/undo`, {
+  const claimedOrigin = await fetch(`${server.base}/api/undo`, {
     method: 'POST', headers: { origin: server.base, 'sec-fetch-site': 'same-origin' },
+  });
+  assert.equal(claimedOrigin.status, 403);
+  assert.equal((await claimedOrigin.json()).refused, 'room-session-required');
+  assert.equal(fs.readFileSync(file, 'utf8'), 'page write\n');
+  const page = await fetch(`${server.base}/api/undo`, {
+    method: 'POST', headers: {
+      origin: server.base, 'sec-fetch-site': 'same-origin', 'x-voicebox-session-token': sessionToken,
+    },
   });
   assert.equal(page.status, 200);
   assert.equal(fs.existsSync(file), false);

@@ -177,7 +177,9 @@ test("file actions: delete, edit, diff, and grep execute with audit trails and c
   assert.equal(undoStatus1.canUndo, true);
   assert.equal(undoStatus1.last.name, "src/components/Button.js");
 
-  const undoRes1 = await fetch(`${base}/api/undo`, { method: "POST" });
+  const undoRes1 = await fetch(`${base}/api/undo`, {
+    method: "POST", headers: { "x-voicebox-host-token": server.hostToken },
+  });
   assert.equal(undoRes1.status, 200);
   const undoBody1 = await undoRes1.json();
   assert.equal(undoBody1.ok, true);

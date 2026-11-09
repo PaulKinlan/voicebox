@@ -4510,6 +4510,15 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/undo") {
+    // The bodyless undo door has the same file-mutation authority as an explicit turn.
+    // A local Origin claim alone is forgeable, even when the browser-CSRF check passes.
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"]) && !hasRoomSessionAuthority(req)) {
+      return json(res, 403, {
+        ok: false,
+        refused: "room-session-required",
+        why: "undo requires the host token or x-voicebox-session-token; Origin alone is not authority",
+      });
+    }
     const result = await execute({ verb: "undo" });
     if (!result.ok) return json(res, 400, result);
     return json(res, 200, result);
