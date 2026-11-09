@@ -4627,6 +4627,9 @@ async function handle(req, res) {
   if (await workspaceRoutes(req, res, url, "write")) return;
 
   if (req.method === "POST" && url.pathname === "/api/delegate") {
+    if (!hasExtensionAuthority(req)) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "delegating a host task requires local authority (the host token, room session token, or local room origin)" });
+    }
     const body = await readJson();
     const result = await execute({ verb: "delegate_task", agent: body?.agent, task: body?.task });
     if (!result.ok) return json(res, 400, result);
@@ -4634,6 +4637,9 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/exec") {
+    if (!hasExtensionAuthority(req)) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "executing a host command requires local authority (the host token, room session token, or local room origin)" });
+    }
     const body = await readJson();
     const command = typeof body?.command === "string" ? body.command : "";
     const cwd = typeof body?.cwd === "string" && body.cwd.trim() ? body.cwd.trim() : undefined;

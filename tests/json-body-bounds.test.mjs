@@ -14,9 +14,9 @@
 //   · normal JSON callers are untouched, and the host survives both refusals.
 //
 // Driven against the real server as a subprocess; every assertion is an HTTP response. The target
-// route is POST /api/exec: readJson runs before any route logic, so a refused body is answered
-// before anything could execute — and a well-formed body only ever reaches the verb's own named
-// refusal here, because an empty command is never run.
+// route is POST /api/exec: this fixture supplies the host token so the authority check admits
+// it to readJson; the JSON door then refuses invalid bodies before a command can execute, and
+// a well-formed empty command reaches only the verb's own named refusal.
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -52,7 +52,11 @@ function postRaw({ route = "/api/exec", method = "POST", headers = {}, chunks = 
   return new Promise((resolve, reject) => {
     // Content-Length, always: Node's HTTP parser rejects a CHUNKED body on DELETE outright (bare
     // 400, connection close, no route — measured), so a raw DELETE without it never reaches the door.
-    const bodyHeaders = { "content-length": chunks.reduce((n, c) => n + (typeof c === "string" ? Buffer.byteLength(c) : c.length), 0), ...headers };
+    const bodyHeaders = {
+      "content-length": chunks.reduce((n, c) => n + (typeof c === "string" ? Buffer.byteLength(c) : c.length), 0),
+      ...(route === "/api/exec" ? { "x-voicebox-host-token": server.hostToken } : {}),
+      ...headers,
+    };
     let settled = false;
     let seen = null; // the ServerResponse, once headers are in
     let text = "";

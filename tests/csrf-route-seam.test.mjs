@@ -61,8 +61,9 @@ const decisions = new Map([
   ["POST /api/undo", "csrf"],
   ["POST /api/mini-apps", "json"],
   ["POST /api/mini-app/tools", "csrf"],
-  ["POST /api/delegate", "json"],
-  ["POST /api/exec", "json"],
+  // Host command execution must require authority BEFORE parsing the submitted body.
+  ["POST /api/delegate", "authority"],
+  ["POST /api/exec", "authority"],
   // voicebox-beads-3dma: writes files into the declared root from a caller-supplied bundle, so it is the host's
   // act — the host token, not the JSON door alone.
   ["POST /api/transport/import", "host-token"],
@@ -569,11 +570,11 @@ test("lost guard or JSON door fails, while a harmless GET does not change the PO
   assert.throws(() => assertPostBoundary(unguarded), /POST \/api\/undo: missing browser CSRF guard/);
 
   const noDoor = source.replace(
-    'if (req.method === "POST" && url.pathname === "/api/delegate") {\n    const body = await readJson();\n    const result = await execute({ verb: "delegate_task"',
-    'if (req.method === "POST" && url.pathname === "/api/delegate") {\n    const body = {};\n    const result = await execute({ verb: "delegate_task"',
+    'if (req.method === "POST" && url.pathname === "/api/turn") {\n    const parsed = await readJson();',
+    'if (req.method === "POST" && url.pathname === "/api/turn") {\n    const parsed = {};',
   );
   assert.notEqual(noDoor, source, "the JSON-door mutation must be applied");
-  assert.throws(() => assertPostBoundary(noDoor), /POST \/api\/delegate: declared json but handler no longer calls its boundary/);
+  assert.throws(() => assertPostBoundary(noDoor), /POST \/api\/turn: declared json but handler no longer calls its boundary/);
 
   // The control arm: a READ route changes nothing, so the seam is not simply allergic to edits.
   const read = source.replace(
@@ -582,6 +583,21 @@ test("lost guard or JSON door fails, while a harmless GET does not change the PO
   );
   assert.notEqual(read, source, "the GET control must be applied");
   assertPostBoundary(read);
+});
+
+test("host execution routes refuse before body parsing and cannot lose their authority check", () => {
+  for (const route of ["delegate", "exec"]) {
+    const head = `if (req.method === "POST" && url.pathname === "/api/${route}") {`;
+    const start = source.indexOf(head);
+    assert.ok(start >= 0, `${route}: route must exist`);
+    const handler = source.slice(start, source.indexOf("\n  }", start));
+    const authorityAt = handler.indexOf("if (!hasExtensionAuthority(req))");
+    const bodyAt = handler.indexOf("await readJson()");
+    assert.ok(authorityAt >= 0 && bodyAt > authorityAt, `${route}: authority must precede body parsing`);
+    const noAuthority = source.replace(`${head}\n    if (!hasExtensionAuthority(req)) {`, `${head}\n    if (false) {`);
+    assert.notEqual(noAuthority, source, `${route}: mutation must remove the route's authority check`);
+    assert.throws(() => assertPostBoundary(noAuthority), new RegExp(`POST \\/api\\/${route}: declared authority but handler no longer calls its boundary`));
+  }
 });
 
 // voicebox-beads-cegk: the non-POST decisions must be REAL — a decision that a handler no longer honours, and a

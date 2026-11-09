@@ -55,7 +55,7 @@ test("Work Activity log and enriched Changelog API", async (t) => {
 
     const execRes = await fetch(`${srv.base}/api/exec`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-voicebox-host-token": srv.hostToken },
       body: JSON.stringify({ command: "node --version" }),
     });
     assert.equal(execRes.status, 200);
