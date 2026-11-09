@@ -551,6 +551,24 @@ test("every host mutation has a reviewed browser-CSRF, JSON-door, or authority d
   assertPostBoundary(source);
 });
 
+test("explicit file actions require host or room session credentials before the turn executor", () => {
+  const check = (host) => {
+    const start = host.indexOf('if (req.method === "POST" && url.pathname === "/api/turn") {');
+    assert.ok(start >= 0, "turn route must exist");
+    const turn = host.slice(start, host.indexOf("\n  }", start));
+    const guard = turn.indexOf('if (["write", "edit", "delete", "undo", "mkdir"].includes(verb) &&');
+    const hostToken = turn.indexOf('extensions.hostTokenOk(req.headers["x-voicebox-host-token"])', guard);
+    const roomToken = turn.indexOf("hasRoomSessionAuthority(req)", guard);
+    const executor = turn.indexOf("await execute(action)");
+    assert.ok(guard >= 0 && hostToken > guard && roomToken > guard && executor > roomToken,
+      "explicit file authority must precede execute and require both credential alternatives (not bare Origin)");
+  };
+  check(source);
+  const unguarded = source.replace('if (["write", "edit", "delete", "undo", "mkdir"].includes(verb) &&', 'if (false &&');
+  assert.notEqual(unguarded, source, "the file-action guard mutation must be applied");
+  assert.throws(() => check(unguarded), /explicit file authority must precede execute/);
+});
+
 for (const { name, mutant, reason } of MUTANTS) {
   test(`${name} fails loudly instead of entering the host routing`, () => {
     const mutated = mutant(source);

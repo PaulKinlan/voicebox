@@ -9,7 +9,7 @@ This document traces how a user turn flows through Voicebox from initial speech 
 A turn can start from two entry points, both converging on the same server-side action executor:
 
 1. **Text Composer & Dictation (`POST /api/turn`)**:
-   - Submitting text from the stage composer (`#text-form`), browser `SpeechRecognition` dictation, or the Picture-in-Picture widget sends `{ transcript }` (or a schema-validated `{ action: { verb, ... } }` from `COMMAND_VERBS`) to `POST /api/turn`.
+   - Submitting text from the stage composer (`#text-form`), browser `SpeechRecognition` dictation, or the Picture-in-Picture widget sends `{ transcript }` to `POST /api/turn`. A separate explicit `{ action: { verb, ... } }` API path accepts verbs from `COMMAND_VERBS`, without running a transcript resolver. Explicit file mutations (`write`, `edit`, `delete`, `undo`, and future `mkdir`) require the host token or `x-voicebox-session-token`; a bare Origin is not authority (voicebox-beads-5x6c). The page's request helper attaches the room token, but the normal transcript path is unchanged. The token is served in the open page on default loopback, so this check blocks headerless and Origin-only callers, **not** local processes that fetch the page first; use `VOICEBOX_LOOPBACK_AUTH=1` for the wider local-process boundary.
    - `POST /api/turn` is stateless: it resolves the transcript, executes the resulting action in the active workspace root, records the audit trail, and returns `{ transcript, action, result }`:
      ```json
      {

@@ -59,7 +59,7 @@ test("tool failures carry structured diagnostic why and error properties", async
   // Execute an action via /api/turn that fails (edit non-existent file)
   const res = await fetch(`${server.base}/api/turn`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
     body: JSON.stringify({
       action: {
         verb: "edit",

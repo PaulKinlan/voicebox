@@ -364,15 +364,17 @@ function browserMutationRefused(req) {
 // (like reconfiguring bounds or revoking extensions) without exposing or discovering .token on disk.
 const ROOM_SESSION_TOKEN = randomBytes(24).toString("hex");
 
+function hasRoomSessionAuthority(req) {
+  const sessionToken = req.headers["x-voicebox-session-token"];
+  return typeof sessionToken === "string" && Boolean(sessionToken) && timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN);
+}
+
 function hasExtensionAuthority(req) {
   // 1. Host token from CLI / script callers
   if (extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) return true;
 
   // 2. In-room session token embedded in the served HTML
-  const sessionToken = req.headers["x-voicebox-session-token"];
-  if (typeof sessionToken === "string" && sessionToken && timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN)) {
-    return true;
-  }
+  if (hasRoomSessionAuthority(req)) return true;
 
   // 3. Request from the local page origin
   if (typeof req.headers.origin === "string" && localPageOrigins().has(req.headers.origin)) {
@@ -4848,6 +4850,16 @@ async function handle(req, res) {
             refused: "unknown-command",
             error: "refused: unknown-command",
             why: `'${String(verb ?? "")}' is not a recognised command (${[...COMMAND_VERBS].sort().join(", ")})`,
+          });
+        }
+        // A caller-supplied action bypasses transcript resolution. Never take Origin alone
+        // as authority to mutate the machine root: a local process can forge that header.
+        if (["write", "edit", "delete", "undo", "mkdir"].includes(verb) &&
+            !extensions.hostTokenOk(req.headers["x-voicebox-host-token"]) && !hasRoomSessionAuthority(req)) {
+          return json(res, 403, {
+            ok: false,
+            refused: "room-session-required",
+            why: "explicit file changes require the host token or x-voicebox-session-token; Origin alone is not authority",
           });
         }
         action = { ...parsed.action };
