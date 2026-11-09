@@ -4637,8 +4637,8 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/exec") {
-    if (!hasExtensionAuthority(req)) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "executing a host command requires local authority (the host token, room session token, or local room origin)" });
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "executing a host command requires the host token (x-voicebox-host-token); the page token and Origin header are not host credentials" });
     }
     const body = await readJson();
     const command = typeof body?.command === "string" ? body.command : "";

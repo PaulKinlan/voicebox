@@ -63,7 +63,7 @@ const decisions = new Map([
   ["POST /api/mini-app/tools", "csrf"],
   // Host command execution must require authority BEFORE parsing the submitted body.
   ["POST /api/delegate", "authority"],
-  ["POST /api/exec", "authority"],
+  ["POST /api/exec", "host-token"],
   // voicebox-beads-3dma: writes files into the declared root from a caller-supplied bundle, so it is the host's
   // act — the host token, not the JSON door alone.
   ["POST /api/transport/import", "host-token"],
@@ -588,15 +588,17 @@ test("lost guard or JSON door fails, while a harmless GET does not change the PO
 test("host execution routes refuse before body parsing and cannot lose their authority check", () => {
   for (const route of ["delegate", "exec"]) {
     const head = `if (req.method === "POST" && url.pathname === "/api/${route}") {`;
+    const guard = route === "exec" ? 'if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"]))' : "if (!hasExtensionAuthority(req))";
+    const decision = route === "exec" ? "host-token" : "authority";
     const start = source.indexOf(head);
     assert.ok(start >= 0, `${route}: route must exist`);
     const handler = source.slice(start, source.indexOf("\n  }", start));
-    const authorityAt = handler.indexOf("if (!hasExtensionAuthority(req))");
+    const authorityAt = handler.indexOf(guard);
     const bodyAt = handler.indexOf("await readJson()");
     assert.ok(authorityAt >= 0 && bodyAt > authorityAt, `${route}: authority must precede body parsing`);
-    const noAuthority = source.replace(`${head}\n    if (!hasExtensionAuthority(req)) {`, `${head}\n    if (false) {`);
+    const noAuthority = source.replace(`${head}\n    ${guard} {`, `${head}\n    if (false) {`);
     assert.notEqual(noAuthority, source, `${route}: mutation must remove the route's authority check`);
-    assert.throws(() => assertPostBoundary(noAuthority), new RegExp(`POST \\/api\\/${route}: declared authority but handler no longer calls its boundary`));
+    assert.throws(() => assertPostBoundary(noAuthority), new RegExp(`POST \\/api\\/${route}: declared ${decision} but handler no longer calls its boundary`));
   }
 });
 
