@@ -85,6 +85,9 @@ The table below traces a complete turn executed against a temporary workspace du
 **Unified Workspace Root**: Admitted file extensions operate on the active project root (`["hello.txt"]`).
 <!-- END GENERATED: loop -->
 
+Hand-written guarantees that are NOT part of the generated block above:
+* **Explicit Host Execution Needs the Host Token** (`voicebox-beads-udjb`): a turn normally arrives as a `transcript` and the server resolves it (`step 2`). When the request supplies an `action` object instead, the caller names the command rather than the room resolving it, and the `exec`/`system` verbs run that command on the machine through its own shell — so that path now requires `x-voicebox-host-token` (403 `host-token-required`) before `execute()` is called. An unauthenticated `{"action":{"verb":"exec","command":"touch <marker>"}}` used to return `200` and write the marker (`voicebox-beads-jp4d`). The transcript path is deliberately NOT gated: it is the room's own flow, and gating it would break the page rather than the attacker. What that leaves open is a trust-model question rather than an oversight, filed as `voicebox-beads-5x6c`: an explicit `write`/`edit`/`delete` action still writes the machine root with no credential, which the page legitimately uses, so whether it needs authority too is a decision about what the in-room session token buys.
+
 ### Extension Registry Integrity at Startup
 When the server starts or reloads the extension registry, `lib/extensions.mjs` re-runs the admission gate (`core/extensions.ts`) on every admitted descriptor and cross-checks `.ledger.jsonl`:
 - Any admitted descriptor that fails validation, fails JSON parsing (`unreadable`), or was deleted from disk (`descriptor-missing`) is reported in `failedLoads` on `GET /api/extensions` and displayed in the Extensions UI as **Approved, not running** (`tests/extension-init-errors.test.mjs`, `tests/extensions-ui.test.mjs`).

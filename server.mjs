@@ -88,6 +88,13 @@ import {
 import { upgrade as wsUpgrade } from "./lib/ws-server.mjs";
 import { createLiveSession, LIVE_MODEL, inputRateRequiredBy, registerLiveProvider } from "./lib/live-session.mjs";
 import { COMMANDS, COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "./lib/commands.mjs";
+/**
+ * The verbs an EXPLICIT `/api/turn` action may use only with the host token (voicebox-beads-udjb): `exec` runs a
+ * shell command and `system` runs a host system command, so both execute on this machine rather than editing a file
+ * through the root's own authority. Everything else in the body's verb whitelist is a file/tool operation whose
+ * authority is the declared root and the paths it allows.
+ */
+const HOST_EXEC_VERBS = new Set(["exec", "system"]);
 import { listTools, searchTools, runSystemCommand } from "./lib/tool-index.mjs";
 import {
   frameProjectInstruction,
@@ -4867,6 +4874,25 @@ async function handle(req, res) {
         }
         action = { ...parsed.action };
         delete action.turn;
+        // EXPLICIT HOST EXECUTION IS THE HOST'S ACT (voicebox-beads-udjb, TM-EXEC-008 family). An action supplied in
+        // the request body is not a transcript the room resolved — it is a caller naming a command — and `exec` and
+        // `system` run it through the machine's shell. That door was open: an unauthenticated
+        // `{"action":{"verb":"exec","command":"touch <marker>"}}` returned 200 and wrote the marker, so anything that
+        // could reach loopback had a shell on this machine with no credential (voicebox-beads-jp4d found it).
+        //
+        // The authority is the host token, for the reasons the other host doors give: an Origin header is a claim any
+        // local process can write on a raw socket, and the in-room session token is served openly in the page HTML.
+        // Only the EXPLICIT body path is gated, deliberately: a transcript turn is resolved by the configured
+        // resolver and executed through the room's own flow, which is what the room is for, and gating that would
+        // break the page rather than the attacker.
+        if (HOST_EXEC_VERBS.has(action.verb) && !extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+          return json(res, 403, {
+            ok: false,
+            refused: "host-token-required",
+            error: "refused: host-token-required",
+            why: `an explicit '${action.verb}' action runs a command on this machine — the host's act. It takes the host token (x-voicebox-host-token); the page cannot hold it, and a bare Origin header is a claim any local process can make. Ask in a transcript instead and the room resolves the turn.`,
+          });
+        }
       } else {
         if (!transcript) return json(res, 400, { ok: false, error: "empty transcript or action required" });
         action = await resolveTurn(transcript, effectiveProvider());
