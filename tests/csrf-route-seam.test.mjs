@@ -740,7 +740,12 @@ test("the module scan refuses a new key, a deleted boundary, and a decision nobo
   // M2: the boundary the decisions name leaves the module — every authority decision is now a claim about nothing.
   const dropped = source.replace("    if (!hasExtensionAuthority(req)) {\n      return json(res, 403,", "    if (false) {\n      return json(res, 403,");
   assert.notEqual(dropped, source, "the mutant must have been inserted");
-  const withoutAuthority = dropped.split("hasExtensionAuthority").length === 1 ? dropped : source.replace(/hasExtensionAuthority\(req\)/g, "false");
+  // BOTH authority mechanisms, because lib/routes/extensions.mjs now legitimately carries two: hasExtensionAuthority
+  // on the extension routes, and hasExplicitRoomAuthority on in-room admission (voicebox-beads-93kz). Removing only
+  // one kind leaves a boundary the module still makes, so the mutant that means "the authority boundary is gone" has
+  // to remove every one of them - otherwise this arm passes while nothing was actually deleted (the state that made
+  // it red when 93kz and wfpb landed in the same batch).
+  const withoutAuthority = source.replace(/has(?:ExplicitRoom|Extension)Authority\(req\)/g, "false");
   assert.throws(() => assertModuleBoundary({ [file]: withoutAuthority }), /declared authority but the module no longer contains that boundary/, "a deleted authority check must fail the inventory");
 
   // M3: a decision whose route nobody declares any more.
