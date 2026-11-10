@@ -42,10 +42,11 @@
 // because reading a launch target is not launching it (voicebox-beads-wkdp) — the filename needs no assembly.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { tableMembers } from "./lib/route-table.mjs";
+import { stripComments } from "../scripts/docs-check.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = readFileSync(path.join(root, "server.mjs"), "utf8");
@@ -142,6 +143,12 @@ function pathPattern(body) {
 /** Every verb one clause tests for, mutating or read, plus `ANY_MUTATION` for a `!== "GET"` clause. */
 function clauseMethods(clause, predicateAliases) {
   const methods = new Set();
+  // These regexes are GLOBAL and shared. `String.prototype.matchAll` starts at the regex's current lastIndex rather
+  // than at 0, so a stale index from an earlier clause silently stops a later clause from seeing its own verb — which
+  // is how the module scan first missed the inline `if (req.method === "POST" && url.pathname === …)` declarations and
+  // reported their routes as decision-less. Reset before every read (voicebox-beads-wfpb).
+  METHOD_EQ.lastIndex = 0;
+  NOT_READ.lastIndex = 0;
   // A verb is a verb whatever case the comparison spells it in: `=== "post"`, `.toLowerCase() === "post"` and
   // `.toUpperCase() === "POST"` are the same test, and reader code will write whichever it finds natural (voicebox-beads-zfrh).
   for (const match of clause.matchAll(METHOD_EQ)) methods.add(match[1].toUpperCase());
@@ -609,4 +616,135 @@ test("a non-POST decision is checked against its handler, and an unused one is r
   );
   assert.notEqual(head, source, "the HEAD control must be applied");
   assertPostBoundary(head);
+});
+
+// ── THE EXTRACTED ROUTE MODULES (voicebox-beads-wfpb) ────────────────────────────────────────────────────────
+//
+// The sentence this seam used to end with — "what it still does NOT cover, and never did: route groups extracted to
+// their own tables (lib/routes/*.mjs, extensionRoutes). Those are other files with other seams" — was true and was
+// also the hole. voicebox-beads-pdr6 and voicebox-beads-93kz both changed how a MUTATING route is guarded inside
+// lib/routes/extensions.mjs, and this inventory could not see either: `POST /api/extensions/revoke` was outside it,
+// so nothing here would have failed if its authority check had been dropped. The modules are small, they declare
+// their mutating keys as literals (`"POST /api/branches/merge": async (req, res) => {`), and the host still
+// dispatches them — so they can be inventoried here, with a decision each, rather than left to a sentence.
+//
+// SCOPE, stated the same way the rest of this file states it: a mutating route that names its path in a VARIABLE
+// (`const extDelete = url.pathname.match(/^\/api\/extensions\/([a-z0-9_-]+)$/)`, which
+// `lib/routes/extensions.mjs` has) is still not covered here — it is invisible to a literal scan, and pretending
+// otherwise would be the false confidence this file exists to avoid. Literal keys and inline `req.method === "…" &&
+// url.pathname === "/api/…"` clauses are covered, which is every mutating route the modules declare that way.
+const MODULE_DECISIONS = new Map([
+  // A "wall" decision means: this route adds NO boundary of its own and is reachable only because the host
+  // dispatches the table behind its auth wall. It is a decision, and it is the one that deserves the reader's
+  // attention — `DELETE /api/activity` empties the work-activity log.
+  ["DELETE /api/activity", "wall"],
+  ["POST /api/branches/merge", "authority"],
+  ["POST /api/branches/keep-separate", "json"],
+  ["POST /api/gemini/image", "json"],
+  ["POST /api/gemini/video", "json"],
+  ["POST /api/gemini/embed", "json"],
+  ["POST /api/harnesses/configure", "json"],
+  ["POST /api/presence", "json"],
+  ["DELETE /api/file", "json"],
+  ["PUT /api/file", "json"],
+  ["PATCH /api/file", "json"],
+  ["POST /api/file/diff", "json"],
+  ["POST /api/extensions/proposals", "json"],
+  ["POST /api/extensions/local", "json"],
+  ["POST /api/extensions/create", "json"],
+  ["POST /api/extensions/sideload", "json"],
+  ["POST /api/extensions/approval-request", "json"],
+  // Admission INSTALLS an extension: the in-room branch asks for authority (the host token or the room's own
+  // session token — voicebox-beads-93kz), never a bare Origin claim.
+  ["POST /api/extensions/approve", "authority"],
+  ["POST /api/extensions/admit", "host-token"],
+  ["POST /api/extensions/revoke", "authority"],
+  ["POST /api/extensions/refuse", "authority"],
+  ["POST /api/extensions/reconfigure", "authority"],
+]);
+
+/** What each decision kind must still be true of the handler that carries it. */
+const MODULE_MECHANISMS = {
+  json: /\breadJson(?:Body)?\(/,
+  authority: /has(?:ExplicitRoom|Extension)Authority\(/,
+  "host-token": /hostTokenOk\(/,
+  wall: null,
+};
+
+/**
+ * Every MUTATING route the extracted modules DECLARE AS A KEY, read as text with comments stripped:
+ * `"POST /api/branches/merge": async (req, res) => {` in a route table, and `new Set(["POST /api/x", …])` in a
+ * module's own ROUTES/DECISIONS list. That is the shape the finding named — `POST /api/extensions/revoke` lived in
+ * lib/routes/extensions.mjs with no entry here, so this seam would not have failed if its authority check had been
+ * deleted.
+ *
+ * WHAT IT DOES NOT COVER, stated rather than implied: a mutating route that names its path in a VARIABLE
+ * (`const extDelete = url.pathname.match(/^\/api\/extensions\/([a-z0-9_-]+)$/)`) is not inventoried here; the modules
+ * declare their literal routes as keys, and a variable route is the same blind spot this file has always had one
+ * directory over. The mechanism check below is per MODULE, not per handler: a module is small and single-domain, and
+ * the claim it makes is "this module still contains the boundary the decision names" — weaker than the host's
+ * handler-bounded check, and deliberately not described as more than it is.
+ */
+function moduleSites(overrides = {}) {
+  const dir = path.join(root, "lib", "routes");
+  const sites = [];
+  for (const name of readdirSync(dir).filter((entry) => entry.endsWith(".mjs")).sort()) {
+    const file = `lib/routes/${name}`;
+    const text = stripComments(overrides[file] ?? readFileSync(path.join(dir, name), "utf8"));
+    const seen = new Set();
+    for (const match of text.matchAll(new RegExp(`${Q}([A-Z]+ \\/api\\/[^"'\`]+)${Q}`, "g"))) {
+      const key = match[1];
+      if (READ_METHODS.has(key.split(" ")[0]) || seen.has(key)) continue;
+      seen.add(key);
+      sites.push({ key, file });
+    }
+  }
+  return sites;
+}
+
+function assertModuleBoundary(overrides = {}) {
+  const sites = moduleSites(overrides);
+  for (const { key, file } of sites) {
+    const decision = MODULE_DECISIONS.get(key);
+    assert.ok(decision, `${key} (${file}): a new mutating route declared in an extracted module needs a decision here — json, csrf, host-token, authority or wall`);
+    const mechanism = MODULE_MECHANISMS[decision];
+    assert.ok(decision === "wall" || mechanism, `${key}: unknown decision kind ${decision}`);
+    if (!mechanism) continue;
+    const text = stripComments(overrides[file] ?? readFileSync(path.join(root, file), "utf8"));
+    assert.match(text, mechanism, `${key} (${file}): declared ${decision} but the module no longer contains that boundary`);
+  }
+  for (const [key, decision] of MODULE_DECISIONS) {
+    assert.ok(sites.some((site) => site.key === key), `${key}: obsolete ${decision} decision for an extracted route`);
+  }
+}
+
+test("every mutating route an extracted module declares has a decision, and its module still makes it (voicebox-beads-wfpb)", () => {
+  assertModuleBoundary();
+  // The floor: the modules declare at least these, so a scan that silently stops seeing them fails here rather than
+  // passing because it found nothing.
+  const keys = moduleSites().map((site) => site.key);
+  for (const key of ["POST /api/extensions/revoke", "POST /api/extensions/approve", "POST /api/extensions/admit", "POST /api/branches/merge", "DELETE /api/activity", "PUT /api/file", "POST /api/file/diff"]) {
+    assert.ok(keys.includes(key), `${key} must be visible to the module scan`);
+  }
+});
+
+test("the module scan refuses a new key, a deleted boundary, and a decision nobody declares (voicebox-beads-wfpb)", () => {
+  const file = "lib/routes/extensions.mjs";
+  const source = readFileSync(path.join(root, file), "utf8");
+
+  // M1: a NEW mutating route declared as a key, with no decision here.
+  const added = source.replace('  "POST /api/extensions/reconfigure",', '  "POST /api/extensions/reconfigure",\n  "DELETE /api/extensions/cache",');
+  assert.notEqual(added, source, "the mutant must have been inserted");
+  assert.throws(() => assertModuleBoundary({ [file]: added }), /DELETE \/api\/extensions\/cache \(lib\/routes\/extensions\.mjs\): a new mutating route/, "a new mutating module route must fail the inventory");
+
+  // M2: the boundary the decisions name leaves the module — every authority decision is now a claim about nothing.
+  const dropped = source.replace("    if (!hasExtensionAuthority(req)) {\n      return json(res, 403,", "    if (false) {\n      return json(res, 403,");
+  assert.notEqual(dropped, source, "the mutant must have been inserted");
+  const withoutAuthority = dropped.split("hasExtensionAuthority").length === 1 ? dropped : source.replace(/hasExtensionAuthority\(req\)/g, "false");
+  assert.throws(() => assertModuleBoundary({ [file]: withoutAuthority }), /declared authority but the module no longer contains that boundary/, "a deleted authority check must fail the inventory");
+
+  // M3: a decision whose route nobody declares any more.
+  const removed = source.replace('  "POST /api/extensions/reconfigure",', '');
+  assert.notEqual(removed, source, "the mutant must have been inserted");
+  assert.throws(() => assertModuleBoundary({ [file]: removed }), /POST \/api\/extensions\/reconfigure: obsolete authority decision/, "a decision with no route must fail the inventory");
 });
