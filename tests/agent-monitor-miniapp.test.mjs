@@ -14,6 +14,9 @@ import {
   identifiersInRenderedText,
 } from "../tools/rendered-plain-language.mjs";
 import { startServer } from "./lib/server.mjs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { launch } from "./lib/cdp.mjs";
 
 const BANNED_JARGON_WORDS = [
@@ -135,77 +138,152 @@ test("agent-monitor mini-app: public/apps/agent-monitor.html passes plain-langua
   );
 });
 
-test("agent-monitor mini-app: executes WebMCP tools get_agent_progress and delegate_multi_harness inside the bridge", { timeout: 60000 }, async (t) => {
+test("agent-monitor mini-app: the delegate tool ASKS THE ROOM, and only the room's approval reaches the host (voicebox-beads-j6im)", { timeout: 60000 }, async (t) => {
   const server = await startServer();
   t.after(() => server.stop());
+
+  // A DECLARED MACHINE ROOT, so the approved delegation has somewhere to land: POST /api/tasks/delegate refuses
+  // "task-root-unavailable" without one (D1 — the host's explicitly declared root, never a page's), and then the
+  // approved arm could not tell "the room's request reached the host" from "the host had nowhere to put it".
+  const workspace = mkdtempSync(path.join(tmpdir(), "vb-agent-monitor-"));
+  t.after(() => rmSync(workspace, { recursive: true, force: true }));
+  const declared = await fetch(`${server.base}/api/root`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
+    body: JSON.stringify({ project: "agent-monitor", root: { kind: "machine", path: workspace } }),
+  });
+  assert.equal(declared.status, 200, `declaring the machine root: ${await declared.text()}`);
 
   const page = await launch({ width: 1100, height: 800 });
   t.after(() => page.close());
 
   await page.goto(`${server.base}/`);
 
+  // THIS TEST MUST BE THE ROOM (voicebox-beads-j6im landed after it was written). `POST /api/tasks/delegate` is a
+  // HOST ACTION in public/relay-policy.mjs: app code may ASK for it, and only the room performs it after a person
+  // approves. A harness with no room can therefore only ever time out — which is correct, and it is exactly the
+  // authority the security fix removed from app code. So this drives the same frames the real room drives over the
+  // same MessagePort, rebuilds the body with the same public/relay-body.mjs, and checks the SERVER's state (not the
+  // app's own optimistic rendering) to show which of the two answers actually changed anything.
   const outcome = await page.evaluate(
     async (base, appDescriptor) => {
+      const { relayBody } = await import(`${base}/relay-body.mjs`);
+      const serverTasks = async () => (await (await fetch("/api/tasks")).json()).tasks ?? [];
       return new Promise((resolve, reject) => {
         const outer = document.createElement("iframe");
         outer.src = `${base}/mini-app-bridge.html`;
-        let delegated = null;
+        const asked = [];
+        let refusalAnswer = null;
+        let approvedAnswer = null;
+        let tasksAfterRefusal = null;
+        let tasksAfterApproval = null;
+        const dispatched = [];
+        const channel = new MessageChannel();
+        const port = channel.port1;
+        const callDelegate = (callId) =>
+          port.postMessage({
+            type: "call_tool",
+            callId,
+            name: "delegate_multi_harness",
+            args: { agents: ["pi", "claude", "antigravity"], task: "Audit performance across modules" },
+          });
 
-        window.addEventListener("message", (e) => {
+        window.addEventListener("message", async (e) => {
           if (e.origin !== window.location.origin) return;
-          if (e.data?.type === "bridge_ready") {
-            outer.contentWindow.postMessage(
-              {
-                type: "load_app",
-                appId: appDescriptor.appId,
-                html: appDescriptor.html,
-              },
-              window.location.origin,
-            );
-          } else if (e.data?.type === "app_ready" && e.data?.appId === appDescriptor.appId) {
-            outer.contentWindow.postMessage(
-              {
-                type: "call_tool",
-                callId: "call-delegate",
-                name: "delegate_multi_harness",
-                args: {
-                  agents: ["pi", "claude", "antigravity"],
-                  task: "Audit performance across modules",
-                },
-              },
-              window.location.origin,
-            );
-          } else if (e.data?.type === "tool_result" && e.data?.callId === "call-delegate") {
-            delegated = e.data;
-            outer.contentWindow.postMessage(
-              {
-                type: "call_tool",
-                callId: "call-progress",
-                name: "get_agent_progress",
-                args: {},
-              },
-              window.location.origin,
-            );
-          } else if (e.data?.type === "tool_result" && e.data?.callId === "call-progress") {
-            resolve({ delegated, progress: e.data });
+          const msg = e.data;
+          if (msg?.type === "bridge_ready") {
+            outer.contentWindow.postMessage({ type: "mini_app_port" }, window.location.origin, [channel.port2]);
+            port.postMessage({ type: "load_app", appId: appDescriptor.appId, html: appDescriptor.html });
+          } else if (msg?.type === "app_ready" && msg?.appId === appDescriptor.appId) {
+            callDelegate("call-refused");
+          } else if (msg?.type === "host_action_request") {
+            asked.push({ action: msg.action, route: msg.route, method: msg.method, path: msg.path });
+            if (asked.length === 1) {
+              // ARM 1 — A PERSON DECLINES. The app is told so, and nothing is sent.
+              port.postMessage({ type: "host_action_result", callId: msg.callId, ok: false, error: "the person declined" });
+              return;
+            }
+            // ARM 2 — A PERSON APPROVES: the room rebuilds the body exactly as public/components/mini-app-surface.mjs
+            // does and performs the request itself, with the room's own origin, which the app never holds.
+            const carried = relayBody(msg.body, { maxBytes: 65536 });
+            if (!carried.ok) {
+              port.postMessage({ type: "host_action_result", callId: msg.callId, ok: false, error: carried.error });
+              return;
+            }
+            port.postMessage({ type: "host_action_state", callId: msg.callId, state: "executing" });
+            const response = await fetch(new URL(msg.path, base), {
+              method: msg.method,
+              ...(msg.contentType ? { headers: { "content-type": msg.contentType } } : {}),
+              body: carried.body,
+            });
+            const bodyText = await response.text();
+            dispatched.push({ path: msg.path, status: response.status, bodyText: bodyText.slice(0, 300) });
+            port.postMessage({
+              type: "host_action_result",
+              callId: msg.callId,
+              ok: true,
+              status: response.status,
+              headers: { "content-type": response.headers.get("content-type") || "application/json" },
+              bodyText,
+            });
+          } else if (msg?.type === "tool_result" && msg?.callId === "call-refused") {
+            refusalAnswer = msg;
+            tasksAfterRefusal = await serverTasks();
+            callDelegate("call-approved");
+          } else if (msg?.type === "tool_result" && msg?.callId === "call-approved") {
+            approvedAnswer = msg;
+            tasksAfterApproval = await serverTasks();
+            port.postMessage({ type: "call_tool", callId: "call-progress", name: "get_agent_progress", args: {} });
+          } else if (msg?.type === "tool_result" && msg?.callId === "call-progress") {
+            resolve({ asked, refusalAnswer, approvedAnswer, tasksAfterRefusal, tasksAfterApproval, progress: msg, dispatched });
           }
         });
 
         document.body.appendChild(outer);
-        setTimeout(() => reject(new Error("timed out waiting for agent-monitor WebMCP tools")), 20000);
+        setTimeout(() => reject(new Error(`timed out waiting for agent-monitor WebMCP tools; asked: ${JSON.stringify(asked)}`)), 25000);
       });
     },
     server.base,
     AGENT_MONITOR_MINI_APP,
   );
 
-  assert.equal(outcome.delegated.ok, true);
-  assert.equal(outcome.delegated.result.launchedCount, 3);
-  assert.deepEqual(outcome.delegated.result.agents, ["pi", "claude", "antigravity"]);
+  // THE APP ASKED, TWICE, FOR EXACTLY ONE ROUTE — app code has no other way to reach it.
+  assert.equal(outcome.asked.length, 2, `both delegate calls must ask the room, got ${JSON.stringify(outcome.asked)}`);
+  for (const ask of outcome.asked) {
+    assert.equal(ask.route, "POST /api/tasks/delegate");
+    assert.equal(ask.method, "POST");
+    assert.equal(ask.path, "/api/tasks/delegate");
+    assert.match(ask.action, /delegate/i);
+  }
 
+  // ARM 1: the person declined. The app answered, and the SERVER HAS NOTHING — the app's own optimistic rendering
+  // is not the host's state, which is the whole reason this arm reads /api/tasks instead of the app's reply.
+  assert.ok(outcome.refusalAnswer, "a declined host action must still answer the app");
+  assert.deepEqual(outcome.tasksAfterRefusal, [], "a declined host action must not launch anything on the host");
+
+  // ARM 2: the person approved. The host really delegated, and the app's answer reflects that.
+  assert.equal(outcome.approvedAnswer.ok, true);
+  assert.equal(outcome.approvedAnswer.result.launchedCount, 3);
+  assert.deepEqual(outcome.approvedAnswer.result.agents, ["pi", "claude", "antigravity"]);
+  // COUNT, NOT EXACTLY THREE: which harnesses a machine can actually launch is machine state — on this box `pi`
+  // answers "adapter-unavailable" (no pi-acp installed) and only the ones with a working adapter create tasks. An
+  // exact count here would turn a missing adapter into a red test for every lane, which is the machine-state
+  // pathology docs/speed.md names. What must be true on ANY machine: the approved request reached the host and
+  // created the work it was asked to create.
+  assert.ok(
+    outcome.tasksAfterApproval.length >= 1,
+    `an approved host action must reach the host, got ${JSON.stringify(outcome.tasksAfterApproval)}; dispatched=${JSON.stringify(outcome.dispatched)}`,
+  );
+  for (const task of outcome.tasksAfterApproval) {
+    assert.equal(task.task ?? task.prompt, "Audit performance across modules", `every launched task carries the prompt: ${JSON.stringify(task)}`);
+  }
+
+  // And the read tool still works through the relay, over the same bridge.
   assert.equal(outcome.progress.ok, true);
   assert.ok(Array.isArray(outcome.progress.result.activeHarnesses));
-  assert.equal(outcome.progress.result.tasks.length, 3);
+  // The app's board is NOT the host's list, and this test does not pretend otherwise: the app renders optimistically
+  // (it draws three rows before the route answers, including for the refused arm), so its count legitimately
+  // exceeds the host's. The boundary is the host's state, asserted above; this only proves the read tool answers.
+  assert.ok(outcome.progress.result.tasks.length >= 1, "the progress tool must report the board it rendered");
   assert.equal(outcome.progress.result.tasks[0].prompt, "Audit performance across modules");
 });
-
