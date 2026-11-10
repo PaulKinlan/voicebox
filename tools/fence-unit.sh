@@ -31,17 +31,23 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ "$#" -eq 0 ]; then
   set -- /usr/bin/node /srv/voicebox/tools/env-serve.mjs
 fi
-# BOOT IDENTITY (xqg's per-boot marker, carried in by the provider): when VOICEBOX_BOOT_MARKER is
-# set it rides the unit's environment through the fence's --setenv into env-serve, which must
-# answer with it — a stranger on a recycled port cannot. 32-hex, minted per boot by the caller.
-# THE DOOR'S CREDENTIAL (voicebox-beads-pehr): VOICEBOX_BEARER rides the same channel — the
-# pairing bearer at boot time, which env-serve requires before its mutating doors open.
+# THE BOOT IDENTITY AND THE DOOR'S CREDENTIAL COME FROM A FILE, NOT FROM AN Environment= PROPERTY
+# (voicebox-beads-thb4, TM-CRED-005). This script used to pass both as
+# --property=Environment=VOICEBOX_BEARER=… / VOICEBOX_BOOT_MARKER=…, and a transient unit's
+# Environment= is readable by ANY same-UID process for the unit's whole life
+# (`systemctl --user show <unit> -p Environment`) — so the pairing bearer sat in a property list a
+# sandbox-adjacent process could dump, for up to RuntimeMaxSec. The caller now writes those values to
+# a 0600 file inside the sandbox home and passes only its PATH (VOICEBOX_CREDENTIAL_FILE, not a
+# secret); fence.sh reads it, exports the two names for its own --setenv, and UNLINKS it before
+# bwrap starts, so the sandbox never sees the file the sandbox home is bound from.
+#
+# BOOT IDENTITY (xqg's per-boot marker, carried in by the provider): 32-hex, minted per boot by the
+# caller; env-serve must answer with it, so a stranger on a recycled port cannot impersonate the
+# environment. THE DOOR'S CREDENTIAL (voicebox-beads-pehr): VOICEBOX_BEARER, the pairing bearer at
+# boot time, which env-serve requires before its mutating doors open.
 AUTH_PROPS=()
-if [ -n "${VOICEBOX_BOOT_MARKER:-}" ]; then
-  AUTH_PROPS+=(--property=Environment=VOICEBOX_BOOT_MARKER="$VOICEBOX_BOOT_MARKER")
-fi
-if [ -n "${VOICEBOX_BEARER:-}" ]; then
-  AUTH_PROPS+=(--property=Environment=VOICEBOX_BEARER="$VOICEBOX_BEARER")
+if [ -n "${VOICEBOX_CREDENTIAL_FILE:-}" ]; then
+  AUTH_PROPS+=(--property=Environment=VOICEBOX_CREDENTIAL_FILE="$VOICEBOX_CREDENTIAL_FILE")
 fi
 exec /usr/bin/systemd-run --user --collect \
   "${AUTH_PROPS[@]}" \

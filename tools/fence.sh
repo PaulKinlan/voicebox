@@ -13,6 +13,22 @@ SANDBOX_HOME="$1"
 PORT="$2"
 shift 2
 mkdir -p "$SANDBOX_HOME/workspace"
+# THE CREDENTIALS ARRIVE AS A FILE, NEVER AS A UNIT PROPERTY (voicebox-beads-thb4, TM-CRED-005). The
+# caller writes VOICEBOX_BEARER and/or VOICEBOX_BOOT_MARKER into a 0600 file in the sandbox home and
+# passes its path here; this reads the two names it knows, then DELETES the file — before bwrap runs,
+# because the sandbox home is bound INTO the sandbox and a leftover file there is readable from inside.
+# Lines are read as KEY=VALUE and never evaluated, so a value containing shell syntax is inert.
+if [ -n "${VOICEBOX_CREDENTIAL_FILE:-}" ] && [ -r "${VOICEBOX_CREDENTIAL_FILE:-/nonexistent}" ]; then
+  while IFS='=' read -r _key _value || [ -n "${_key:-}" ]; do
+    case "${_key:-}" in
+      VOICEBOX_BEARER) VOICEBOX_BEARER="$_value" ;;
+      VOICEBOX_BOOT_MARKER) VOICEBOX_BOOT_MARKER="$_value" ;;
+    esac
+  done < "$VOICEBOX_CREDENTIAL_FILE"
+  unset _key _value
+  rm -f -- "$VOICEBOX_CREDENTIAL_FILE"
+fi
+unset VOICEBOX_CREDENTIAL_FILE
 # The tree the fence binds is THIS SCRIPT's repo, not the caller's cwd: a server that boots a fence
 # may run from anywhere, and the probe and the source it mounts live beside this script.
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
