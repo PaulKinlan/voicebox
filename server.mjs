@@ -381,6 +381,24 @@ function hasExtensionAuthority(req) {
   return false;
 }
 
+// ── ADMISSION TAKES THE ROOM'S OWN TOKEN, NOT AN ORIGIN CLAIM (voicebox-beads-93kz, TM-EXT-014) ──────────
+//
+// hasExtensionAuthority's third branch — `Origin` is one of this server's page origins — is a CLAIM: any local
+// process can write that header on a raw socket (docs/13 §1) and any same-origin page context can present it. That
+// was enough for /api/extensions/approve to run approveInRoom, i.e. to INSTALL an extension, and an installed
+// extension interpolates $ENV_VAR at run time (voicebox-beads-izu7), so the claim could reach credentials.
+//
+// So the installing act asks for evidence that this request came from the room rather than from anything else that
+// knows the origin: the session token minted for this process and served into the room's own page, or the host
+// token. Being honest about the limit: that token is served in GET /'s HTML, so a determined local process can read
+// it — what this closes is the ORIGIN-ONLY claim (another page context, a relay, a replayed form). A local process
+// that can read this server's HTML is still stopped only by the host token, which the page cannot hold at all.
+function hasExplicitRoomAuthority(req) {
+  if (extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) return true;
+  const sessionToken = req.headers["x-voicebox-session-token"];
+  return typeof sessionToken === "string" && sessionToken !== "" && timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN);
+}
+
 // ── LOOPBACK SESSION AUTH (docs/13 §4 — voicebox-beads-kkc, epic 2gq) ─────────────────────────
 // The residual boundary 5c1 named but did not close: on loopback TCP any local process can write
 // `Origin: http://127.0.0.1:<port>` on a raw socket, so the Origin check distinguishes BROWSER
@@ -4253,6 +4271,7 @@ const extensionRoutes = createExtensionRoutes({
   contentJsonBodyMaxBytes: CONTENT_JSON_BODY_MAX_BYTES,
   extensionRuntime: extensions,
   hasExtensionAuthority,
+  hasExplicitRoomAuthority,
 });
 
 async function handle(req, res) {
