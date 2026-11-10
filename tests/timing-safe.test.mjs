@@ -107,8 +107,12 @@ test("adoption: the three credential-comparison sites route through the owner (s
   assert.match(cookieBody, /timingSafeStringEqual\(/, "sessionCookieOk must ask the owner for the cookie comparison");
   assert.equal(cookieBody.includes("=== LOOPBACK_SESSION"), false,
     "sessionCookieOk must not compare the cookie itself - the reviewer's mutant (reverting this call) has to fail here");
-  assert.equal(server.split("timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN)").length - 1, 2,
-    "both session-token comparisons (extension authority and /api/root) must use the owner");
+  // THREE sites now, not two (voicebox-beads-93kz). 93kz adds a route that decides a request by the room's
+  // session token - `declaredByRoomSession` on the root-authority wall - and it asks the owner like the other
+  // two. The count stays exact on purpose: it is what stops a fourth site appearing with a raw compare. The
+  // three are the extension authority check (~line 380), the /api/root check (~line 406), and 93kz's wall.
+  assert.equal(server.split("timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN)").length - 1, 3,
+    "every session-token comparison (extension authority, /api/root, and the room-session wall from 93kz) must use the owner");
 });
 
 // ── 3. real protocol acceptance ────────────────────────────────────────────
