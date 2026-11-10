@@ -128,3 +128,48 @@ test("replacing an existing file needs an explicit overwrite:true (voicebox-bead
     assert.equal(fs.readFileSync(path.join(workspace, "README.md"), "utf8"), "from the bundle\n");
   });
 });
+
+// ── the READ direction of the same door (voicebox-beads-c84e) ─────────────────────────────────────────────────
+//
+// Export hands back the contents of every non-dot file under the declared machine root. Import has taken the host
+// token since voicebox-beads-3dma; export did not, so one direction of the same door was open — and the mini-app
+// relay is a caller that can reach it. The cases below are the mirror of the import set: no token is refused, an
+// Origin and a guessed session token are refused too (neither distinguishes a local PROCESS from the person), and
+// the token opens it and returns the file contents.
+const exportBundle = (server, headers = {}, query = "") =>
+  fetch(`${server.base}/api/transport/export${query}`, { headers });
+
+test("GET /api/transport/export without the host token is refused, and the refusal leaks nothing about the root (voicebox-beads-c84e)", async () => {
+  await withServer(async ({ server, workspace }) => {
+    fs.writeFileSync(path.join(workspace, "secret-plans.txt"), "the machine's own business");
+    for (const [what, headers] of [
+      ["no headers at all", {}],
+      ["an Origin claim", { origin: "http://127.0.0.1:1" }],
+      ["a guessed in-room session token", { "x-voicebox-session-token": "guessed" }],
+    ]) {
+      const res = await exportBundle(server, headers);
+      assert.equal(res.status, 403, `${what} must be refused`);
+      const body = await res.json();
+      assert.equal(body.refused, "host-token-required", `${what} must be refused by name`);
+      assert.ok(!JSON.stringify(body).includes("secret-plans"), `${what}: the refusal must not name the root's files`);
+      assert.ok(!JSON.stringify(body).includes(workspace), `${what}: the refusal must not disclose the root path`);
+    }
+  });
+});
+
+test("GET /api/transport/export with the host token returns the bundle, and only then (voicebox-beads-c84e)", async () => {
+  await withServer(async ({ server, workspace }) => {
+    fs.writeFileSync(path.join(workspace, "notes.txt"), "hello from the machine root");
+    const res = await exportBundle(server, { "x-voicebox-host-token": server.hostToken });
+    assert.equal(res.status, 200, "the host token opens the read direction");
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    const entry = body.bundle.files.find((file) => file.path === "notes.txt");
+    assert.ok(entry, `the bundle must carry notes.txt: ${JSON.stringify(body.bundle.files.map((f) => f.path))}`);
+    assert.equal(entry.content, "hello from the machine root");
+    // The negative control for the same call: the same request without the token cannot produce this body.
+    const refused = await (await exportBundle(server)).json();
+    assert.equal(refused.ok, false, "the same call without the token answers ok:false, never a bundle");
+    assert.ok(!JSON.stringify(refused).includes("hello from the machine root"));
+  });
+});
