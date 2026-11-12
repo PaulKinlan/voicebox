@@ -15,6 +15,8 @@
 //
 // PURE: No imports outside core/ (N18). Zero IO, zero network, zero secrets.
 
+import { DEFAULT_TASK_BUDGET_MS, MAX_TASK_BUDGET_MS } from "./tasks.ts";
+
 export type RuntimeKind = "node" | "deno" | "browser";
 
 export interface RuntimeCapabilities {
@@ -246,12 +248,13 @@ export function validateConfiguredAgent(
 
   // 7. Validate bounds
   const rawBounds = (o.bounds && typeof o.bounds === "object" ? o.bounds : {}) as Record<string, unknown>;
-  const isClaude = harness === "claude" || harness === "claude-code" || adapter === "claude-code" || adapter === "claude";
-  const defaultDeadline = isClaude ? 120000 : 60000;
+  // A stdio harness is a coding agent doing real work: its default is the task budget, not one model
+  // round trip (voicebox-beads-cwx5.9). An in-process or web-worker agent keeps the short default.
+  const defaultDeadline = transport === "stdio" ? DEFAULT_TASK_BUDGET_MS : 60000;
   const deadlineMs = Number(rawBounds.deadlineMs ?? defaultDeadline);
   const maxOutputBytes = Number(rawBounds.maxOutputBytes ?? 65536);
-  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 100 || deadlineMs > 600000) {
-    return { ok: false, refused: "bad-request", why: "deadlineMs must be between 100 and 600000 ms" };
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 100 || deadlineMs > MAX_TASK_BUDGET_MS) {
+    return { ok: false, refused: "bad-request", why: `deadlineMs must be between 100 and ${MAX_TASK_BUDGET_MS} ms` };
   }
   if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 256 || maxOutputBytes > 10485760) {
     return { ok: false, refused: "bad-request", why: "maxOutputBytes must be between 256 and 10485760 bytes" };

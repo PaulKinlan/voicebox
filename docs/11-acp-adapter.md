@@ -31,7 +31,12 @@ When no harness is active, calling `delegate_task` returns `executor-unavailable
 ### Shared ACP Client (`lib/acp-client.mjs`)
 `createAcpClient` manages the JSON-RPC stdio lifecycle for both Pi and Claude Code:
 - **Handshake & Session Setup**: Sends `initialize`, creates a workspace session via `session/new`, configures model and reasoning options via `session/set_config_option`, and dispatches tasks via `session/prompt`.
-- **Timeout Ceilings**: Enforces per-adapter wall-clock bounds (`60,000ms` ceiling for `pi-acp`; `120,000ms` `CLAUDE_ACP_TIMEOUT_CEILING_MS` for `claude-acp`, meta-capped at `600,000ms`) and a `64 KiB` output ceiling.
+- **Time bounds (three clocks)**: A delegated task is bounded by a whole-task **budget** and, inside it, by **silence**, so a harness that is visibly working is not killed by the clock (voicebox-beads-cwx5.9).
+  - *Budget*: the task's `deadlineMs`. A stdio agent defaults to 30 minutes (`DEFAULT_TASK_BUDGET_MS`) and may be configured up to 1 hour (`MAX_TASK_BUDGET_MS`). Expiry refuses with `task-deadline` or `acp-timeout`.
+  - *Silence*: an ACP harness may send no `session/update` for at most 5 minutes (`ACP_PROMPT_SILENCE_MS`); a CLI harness may print nothing for at most 5 minutes (`CLI_EXECUTOR_SILENCE_MS`). Every update or line of output re-arms the clock, and it is paused while a permission request is waiting for an answer. The 5 minutes is sized for one long tool call, which reports only when it starts and ends.
+  - *Handshake*: `initialize`, `session/new` and config requests keep the per-adapter response ceiling (`60,000ms` for `pi-acp`; `120,000ms` `CLAUDE_ACP_TIMEOUT_CEILING_MS` for `claude-acp`, meta-capped at `600,000ms`).
+  - Agents saved before this change carry the old 60s or 120s default as their deadline; those two values are lifted to the 30 minute budget when the registry loads.
+- **Output bound**: The final answer is capped at `64 KiB`. An ACP answer past it refuses with `task-output-over-budget`. A CLI harness is not killed for long output: all of it is streamed to the task console and the end of it is kept as the answer, marked as truncated.
 - **Three-State Cancellation**:
   - Calling `cancel()` during an active turn sends `session/cancel` (`{ ok: true, sent: true }`). When the adapter confirms `stopReason: "cancelled"`, the task settles as `task-cancelled`. A frame dropped because the harness was already gone reports `sent: false` — no notification left, and the transport's closure is the verdict (`voicebox-beads-cps6`).
   - Calling `cancel()` when no task exists returns `task-not-found`.
