@@ -351,7 +351,9 @@ body[data-voice="speaking"] .mic-dock {
 .send { color: light-dark(#fff, #141c34); border: 0; border-radius: 999px; padding: 0 18px; min-height: 36px; font-weight: 500; background: var(--accent); }
 .send:hover { filter: brightness(1.06); }
 .send:disabled { background: color-mix(in srgb, var(--ink) 9%, transparent); color: color-mix(in srgb, var(--muted) 50%, transparent); opacity: 1; }
-.turn-report { min-height: 20px; line-height: 1.45; min-block-size: calc(2lh); /* two lines reserved so the card below does not jump when a report lands */ max-width: 60ch; margin: 14px 0 0; font-size: .8125rem; color: var(--muted); text-align: center; overflow-wrap: anywhere; transition: opacity 0.8s ease; }
+/* A fixed two-line box, so the card below never moves when a report lands, wraps or clears. A longer
+   report is clamped with an ellipsis; the element is a live region, so assistive tech still reads it whole. */
+.turn-report { line-height: 1.45; block-size: calc(2lh); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; max-width: 60ch; margin: 14px 0 0; font-size: .8125rem; color: var(--muted); text-align: center; overflow-wrap: anywhere; transition: opacity 0.8s ease; }
 
 /* ── Extension reconfigure & removal dialog (voicebox-beads-ud5) ─────────── */
 .setting-input {

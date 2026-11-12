@@ -208,6 +208,8 @@
 @media (max-height: 620px) {
   .caption-space { min-height: 24px; margin-bottom: 2px; }
   .voice-top { --voice-top-size: 4.5rem; --voice-top-overlap: 1.5rem; }
+  .voice-top > .thinking-trace { padding-block: 6px; }
+  .voice-top > .thinking-trace .thinking-trace-body { max-block-size: 1.9rem; }
   .caption { font-size: .875rem; }
   .mic-stage { width: 180px; }
   .mic { width: 88px; height: 88px; }
