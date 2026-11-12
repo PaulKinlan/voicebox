@@ -30,6 +30,8 @@ import { createToolCatalogRoutes } from "./lib/routes/tool-catalog.mjs";
 import { createGeminiMediaRoutes } from "./lib/routes/gemini-media.mjs";
 import { createExtensionRoutes } from "./lib/routes/extensions.mjs";
 import { createMiniAppRoutes } from "./lib/routes/mini-apps.mjs";
+import { createAgentRoutes } from "./lib/routes/agents.mjs";
+import { createPermissionRoutes } from "./lib/routes/permissions.mjs";
 import { createGuardedDispatcher } from "./lib/routes/guarded.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
@@ -4286,11 +4288,24 @@ const miniAppRoutes = createMiniAppRoutes({
   json,
   contentJsonBodyMaxBytes: CONTENT_JSON_BODY_MAX_BYTES,
 });
+const agentRoutes = createAgentRoutes({
+  agentRegistry,
+  publicAgentProjection,
+  // The first agent registered for a supported harness activates that harness, and the choice is persisted.
+  onRegistered: (agent) => {
+    if (activeHarness || !agent?.harness || !SUPPORTED_HARNESS_DEFAULTS[agent.harness]) return;
+    activateHarnessInProcess(normalizeHarnessId(agent.harness), agent);
+    writePersistedHarnessSettings(activeHarness, activeHarnesses);
+  },
+  harnessState: () => ({ activeHarness, activeHarnesses: [...activeHarnesses] }),
+  json,
+});
+const permissionRoutes = createPermissionRoutes({ permissions, json });
 // THE GUARDED TABLE (voicebox-beads-cwx5.1, lib/routes/guarded.mjs): routes that DECLARE their boundary as
 // data. The dispatcher enforces each guard before its handler runs, so the checks below are named once, here,
 // and an area joins by adding its defined routes to this list — not by adding lines to handle().
 const guardedRoutes = createGuardedDispatcher({
-  routes: [...miniAppRoutes],
+  routes: [...miniAppRoutes, ...agentRoutes, ...permissionRoutes],
   checks: {
     browserMutationRefused,
     hostTokenOk: (req) => extensions.hostTokenOk(req.headers["x-voicebox-host-token"]),
@@ -4882,67 +4897,9 @@ async function handle(req, res) {
   // be enforced and by which mechanism, what it cannot have — before the act
   // runs. The page (astra's bead) renders this; the API is the surface.
 
-  if (req.method === "POST" && url.pathname === "/api/agents") {
-    if (!hasExtensionAuthority(req)) {
-      return json(res, 403, {
-        ok: false,
-        refused: "host-token-required",
-        why: "configuring an agent is the host's act and requires the host token (x-voicebox-host-token) or an authorized in-room session",
-      });
-    }
-    const body = await readJson();
-    const registered = agentRegistry.register(body);
-    if (!registered.ok) return json(res, 400, registered);
-    if (!activeHarness && registered.agent?.harness && SUPPORTED_HARNESS_DEFAULTS[registered.agent.harness]) {
-      const normalized = normalizeHarnessId(registered.agent.harness);
-      activateHarnessInProcess(normalized, registered.agent);
-      writePersistedHarnessSettings(activeHarness, activeHarnesses);
-    }
-    return json(res, 201, { ok: true, agent: publicAgentProjection(registered.agent), activeHarness, activeHarnesses: [...activeHarnesses] });
-  }
-
-  const agentMatch = url.pathname.match(/^\/api\/agents\/([a-zA-Z0-9_-]+)$/);
-  if (req.method === "PATCH" && agentMatch) {
-    if (!hasExtensionAuthority(req)) {
-      return json(res, 403, {
-        ok: false,
-        refused: "host-token-required",
-        why: "updating an agent is the host's act and requires the host token (x-voicebox-host-token) or an authorized in-room session",
-      });
-    }
-    const agentId = agentMatch[1];
-    const body = await readJson();
-    if (typeof body?.name === "string" && Object.keys(body).length === 1) {
-      const renamed = agentRegistry.rename(agentId, body.name);
-      if (!renamed.ok) return json(res, renamed.refused === "agent-not-found" ? 404 : 400, renamed);
-      return json(res, 200, { ok: true, agent: publicAgentProjection(renamed.agent) });
-    }
-    const updated = agentRegistry.update(agentId, body);
-    if (!updated.ok) return json(res, updated.refused === "agent-not-found" ? 404 : 400, updated);
-    return json(res, 200, { ok: true, agent: publicAgentProjection(updated.agent) });
-  }
-
   // The host retains the auth wall and its authority check; the extension route module handles
   // discovery, staging and decisions through the same bounded JSON door.
   if (await extensionRoutes(req, res, url)) return;
-  if (req.method === "GET" && url.pathname === "/api/permissions/pending") {
-    return json(res, 200, { ok: true, pending: permissions.pending() });
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/permissions/resolve") {
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "resolving a permission request requires the host token (x-voicebox-host-token); the page cannot hold it" });
-    }
-    const body = await readJson().catch((err) => { if (err instanceof BodyRefusal) throw err; return {}; });
-    const requestId = typeof body?.requestId === "string" ? body.requestId : null;
-    if (!requestId) return json(res, 400, { ok: false, refused: "bad-request", why: "resolving a permission request names the requestId" });
-    const result = permissions.resolve(requestId, {
-      allow: Boolean(body.allow),
-      optionId: typeof body.optionId === "string" ? body.optionId : undefined,
-      reason: typeof body.reason === "string" ? body.reason : undefined,
-    });
-    return json(res, result.ok ? 200 : 409, result);
-  }
   // ── PAIRING + PROXIED CALL (docs/09-proxied-custody.md; journal-wdq decisions 3+4) ─────────────
   // Custody: the page holds NO remote credential. It names an environment by KEY and the local host
   // originates the call, attaching the bearer it holds. Pairing is the explicit act that creates the

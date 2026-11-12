@@ -31,7 +31,9 @@ function assertAgentsWiring(source) {
     ["...presenceRoutes", "...agentsReadRoutes"],
     "presence and then agents-read must open the table: nothing routable may be inserted before agents GET",
   );
-  assert.match(source, /req\.method === "POST" && url\.pathname === "\/api\/agents"/, "host's separate privileged POST must remain valid");
+  // The privileged POST lives in lib/routes/agents.mjs behind a declared `authority` guard (voicebox-beads-cwx5.1);
+  // tests/guarded-routes.test.mjs asserts that guard, so here it only has to still be wired into the host.
+  assert.match(source, /createGuardedDispatcher\(\{\s*routes:\s*\[[^\]]*\.\.\.agentRoutes\b/, "host's separate privileged POST must remain wired");
 }
 
 test("the host wires only GET /api/agents at the exact table position, rejecting missing and duplicate handlers", () => {

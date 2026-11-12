@@ -22,8 +22,8 @@
 // scan keyed on POST only answers that one verb: a bodyless `PUT`, `PATCH` or `DELETE` — inline or as a table key —
 // was not inventoried, was never asked for a decision, and nothing failed. So the seam now classifies by METHOD
 // (GET/HEAD/OPTIONS are reads; every other verb is a mutation needing a decision), and it follows the host's two
-// `const m = url.pathname.match(/^\/api\/…$/)` routes (`PATCH /api/agents/<param>`,
-// `DELETE /api/environments/<param>`), which name their path in a variable and so disappeared from a literal scan.
+// `const m = url.pathname.match(/^\/api\/…$/)` routes (such as `DELETE /api/environments/<param>`), which name
+// their path in a variable and so disappeared from a literal scan.
 //
 // voicebox-beads-zfrh — and the verb is read as a verb, not as an upper-case token.
 //
@@ -53,7 +53,7 @@ const source = readFileSync(path.join(root, "server.mjs"), "utf8");
 
 // A new mutating route of ANY verb needs an explicit decision here, even if it plans to use the JSON door: the
 // reviewer must see the reason. The four csrf keys are also asserted against the host guard, and `authority` keys
-// (`PATCH /api/agents/<param>`, `DELETE /api/environments/<param>`) are the routes that match their path into a
+// (`DELETE /api/environments/<param>`) are the routes that match their path into a
 // variable and gate on hasExtensionAuthority instead of on a body read.
 const decisions = new Map([
   ["POST /api/fleet/contact", "json"],
@@ -68,8 +68,6 @@ const decisions = new Map([
   ["POST /api/probe", "csrf"],
   ["POST /api/environments", "json"],
   ["POST /api/turn", "json"],
-  ["POST /api/agents", "json"],
-  ["POST /api/permissions/resolve", "json"],
   ["POST /api/pair", "json"],
   ["POST /api/pair/complete", "json"],
   ["POST /api/bootstrap", "host-token"],
@@ -83,7 +81,6 @@ const decisions = new Map([
   ["PUT /api/agent-settings", "json"],
   ["DELETE /api/root", "host-token"],
   ["DELETE /api/pair", "host-token"],
-  ["PATCH /api/agents/<param>", "authority"],
   ["DELETE /api/environments/<param>", "authority"],
 ]);
 
@@ -590,14 +587,16 @@ test("lost guard or JSON door fails, while a harmless GET does not change the PO
 // voicebox-beads-cegk: the non-POST decisions must be REAL — a decision that a handler no longer honours, and a
 // decision for a route that no longer exists, are the two ways this widened inventory could rot into decoration.
 test("a non-POST decision is checked against its handler, and an unused one is reported", () => {
+  // DELETE /api/environments/<param> stands in for PATCH /api/agents/<param>, which moved to
+  // lib/routes/agents.mjs and declares its guard there (voicebox-beads-cwx5.1).
   const noAuthority = source.replace(
-    'if (req.method === "PATCH" && agentMatch) {\n    if (!hasExtensionAuthority(req)) {',
-    'if (req.method === "PATCH" && agentMatch) {\n    if (false) {',
+    'if (req.method === "DELETE" && envDelete) {\n    if (!hasExtensionAuthority(req)) {',
+    'if (req.method === "DELETE" && envDelete) {\n    if (false) {',
   );
-  assert.notEqual(noAuthority, source, "the PATCH /api/agents authority check must still be where this test removes it");
+  assert.notEqual(noAuthority, source, "the DELETE /api/environments authority check must still be where this test removes it");
   assert.throws(
     () => assertPostBoundary(noAuthority),
-    /PATCH \/api\/agents\/<param>: declared authority but handler no longer calls its boundary/,
+    /DELETE \/api\/environments\/<param>: declared authority but handler no longer calls its boundary/,
   );
 
   // DELETE /api/pair stands in for DELETE /api/mini-apps, which moved to lib/routes/mini-apps.mjs (voicebox-beads-cwx5.1).
