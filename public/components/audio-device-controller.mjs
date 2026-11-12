@@ -20,6 +20,11 @@
 // this controller. A snapshot captured here would keep naming the boot-time client while every
 // assertion about the surface stayed green.
 export function createAudioDeviceController({ els, on, getLiveClient, storage = localStorage }) {
+// THE MICROPHONE CAPTURE WAS ASKED TO USE, kept apart from the saved preference and the device list:
+// "" is the system default, an id is that device, null is "no capture started through this controller".
+// A saved microphone that is plugged back in mid-session does not move capture onto it, so the row and
+// the unplug check must read this, not the preference.
+let captureMicId = null;
 // ── devices: what was chosen, what is available, what is happening ────────
 //
 // Three separate facts per row, because conflating them is how a page ends up
@@ -122,7 +127,9 @@ function renderDevices() {
   if (!prefs.mic.id && !inputIdsUsable) mic = listening ? "Listening through System default" : "Mic off · this browser lists no named microphones until you allow access";
   else if (!prefs.mic.id) mic = listening ? "Listening through System default" : "Mic off";
   else if (micNamesHidden && !micPresent) mic = `${micName} · not checked yet — device names can be hidden until microphone access is allowed`;
-  else if (listening) mic = `Listening through ${micName}`;
+  else if (listening) mic = prefs.mic.id && captureMicId === ""
+    ? `Listening through System default · ${micName} ${micPresent ? "was not connected when the mic started" : "is not connected"}`
+    : `Listening through ${micName}`;
   else if (micPresent) mic = `${micName} · mic off`;
   else mic = `${micName} is not connected. Mic off.`;
   if (els.micDeviceState) els.micDeviceState.textContent = mic;
@@ -150,7 +157,10 @@ function renderDevices() {
 }
 
 async function refreshDevices() {
-  const before = { mic: devices.prefs.mic.id, out: devices.prefs.out.id };
+  // "Before" for the microphone is the device CAPTURE IS USING, when known: a saved microphone that was
+  // missing at press time was never asked for (micForCapture), so capture is on the system default ("")
+  // and that device coming and going again must not stop a working session.
+  const before = { mic: captureMicId !== null ? captureMicId : devices.prefs.mic.id, out: devices.prefs.out.id };
   const listed = await listDevices();
   devices.inputs = listed.inputs;
   devices.outputs = listed.outputs;
@@ -183,6 +193,7 @@ on(els.micSelect, "change", async () => {
   if (getLiveClient()?.state?.capture) {
     try {
       await getLiveClient().stopCapture?.();
+      captureMicId = devices.prefs.mic.id;
       await getLiveClient().startCapture?.({ deviceId: devices.prefs.mic.id || null });
     } catch { /* startCapture surfaces any error via onError */ }
   }
@@ -213,6 +224,27 @@ on(els.outSelect, "change", async () => {
   }
   renderDevices();
 });
+  // THE SAVED MICROPHONE IS CHECKED AGAINST WHAT IS PLUGGED IN, AT PRESS TIME (Paul, 2026-11-12: "we
+  // need to scan for microphones so we don't use ones that don't exist"). Asking getUserMedia for an
+  // `exact` id that has left the machine is a refusal every time, and the person saw only "the
+  // microphone is not available" with no way to tell it was the saved choice that was missing. So the
+  // list is read first: a saved id that is not in it is NOT asked for, capture uses the system default,
+  // and the caller gets the saved name back so it can say so — the switch is named, never silent. The
+  // preference itself is kept, so plugging the device back in makes it the microphone again.
+  // A list whose ids are hidden (no microphone access yet) cannot show absence, so the saved id is tried.
+  async function micForCapture() {
+    const saved = devices.prefs.mic;
+    const use = (deviceId, missing) => { captureMicId = deviceId ?? ""; return { deviceId, missing }; };
+    if (!saved.id) return use(null, null);
+    let listed;
+    try { listed = await listDevices(); } catch { return use(saved.id, null); }
+    devices.inputs = listed.inputs;
+    devices.namesVisible = listed.names === true;
+    const idsUsable = listed.inputs.some((d) => d.id);
+    if (!idsUsable || listed.inputs.some((d) => d.id === saved.id)) return use(saved.id, null);
+    return use(null, saved.name || "The chosen microphone");
+  }
+
   // The page global the host publishes (window.__voiceboxDevices) is built from these accessors rather
   // than from the record itself: the three device facts stay readable by whoever asks, and the record
   // stays private to the module that owns it.
@@ -220,6 +252,7 @@ on(els.outSelect, "change", async () => {
     loadPrefs,
     refresh: refreshDevices,
     micId: () => devices.prefs.mic.id || null,
+    micForCapture,
     outputId: () => devices.prefs.out.id || null,
     state: () => ({ ...devices.prefs, policy: devices.policy }),
   };
