@@ -262,9 +262,6 @@ export function createStopSpeakingHandler({ els = {}, window = globalThis.window
       interruptBtn.disabled = wasDisabled;
     } else {
       try {
-        win?.__voiceboxOfflineSpeech?.stopSpeaking?.();
-      } catch {}
-      try {
         const client = win?.__voiceboxLiveClient;
         if (typeof client?.interruptSpeech === "function") {
           client.interruptSpeech("page");

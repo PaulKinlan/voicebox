@@ -150,12 +150,11 @@ test("system commands: a typed command reaches the browser and changes the UI (v
 
   // ── Audio session: stop_speaking (interrupt, mute, unmute) ───────────────────
   // Drive the real consumer paths for stop_speaking: audio client stopReply/stopPlayback,
-  // provider generation cancellation via interruptSpeech, offline speech cancellation,
+  // provider generation cancellation via interruptSpeech,
   // browser speech synthesis, and interrupt button trigger.
   await page.evaluate(() => {
     window.__flushedLivePlayback = false;
     window.__providerInterruptCount = 0;
-    window.__offlineSpeechStopped = false;
     window.__speechCancelled = false;
     window.__interruptClicked = false;
     window.__playbackStoppedOnMute = 0;
@@ -168,9 +167,6 @@ test("system commands: a typed command reaches the browser and changes the UI (v
         if (source === "page") window.__providerInterruptCount++;
         return { flushed: true };
       },
-    };
-    window.__voiceboxOfflineSpeech = {
-      stopSpeaking: () => { window.__offlineSpeechStopped = true; return { ok: true }; },
     };
     try {
       if (window.speechSynthesis) {
@@ -197,13 +193,11 @@ test("system commands: a typed command reaches the browser and changes the UI (v
   const stopObs = await page.evaluate(() => ({
     flushedLive: window.__flushedLivePlayback,
     providerInterruptCount: window.__providerInterruptCount,
-    offlineStopped: window.__offlineSpeechStopped,
     speechCancelled: window.__speechCancelled,
     interruptClicked: window.__interruptClicked,
   }));
   assert.equal(stopObs.flushedLive, true, "'stop speaking' flushes active live audio playback");
   assert.equal(stopObs.providerInterruptCount, 1, "'stop speaking' sends exactly one interrupt control to provider (voicebox-beads-5fh0, voicebox-beads-iicm)");
-  assert.equal(stopObs.offlineStopped, true, "'stop speaking' stops offline speech synthesis");
   assert.equal(stopObs.speechCancelled, true, "'stop speaking' cancels browser speech synthesis");
   assert.equal(stopObs.interruptClicked, true, "'stop speaking' triggers interrupt button");
 
@@ -211,7 +205,6 @@ test("system commands: a typed command reaches the browser and changes the UI (v
   await page.evaluate(() => {
     window.__flushedLivePlayback = false;
     window.__providerInterruptCount = 0;
-    window.__offlineSpeechStopped = false;
     window.__speechCancelled = false;
     window.__interruptClicked = false;
   });
@@ -219,7 +212,6 @@ test("system commands: a typed command reaches the browser and changes the UI (v
   const quietObs = await page.evaluate(() => ({
     flushedLive: window.__flushedLivePlayback,
     providerInterruptCount: window.__providerInterruptCount,
-    offlineStopped: window.__offlineSpeechStopped,
     speechCancelled: window.__speechCancelled,
     interruptClicked: window.__interruptClicked,
   }));
@@ -231,7 +223,6 @@ test("system commands: a typed command reaches the browser and changes the UI (v
   await page.evaluate(() => {
     window.__flushedLivePlayback = false;
     window.__providerInterruptCount = 0;
-    window.__offlineSpeechStopped = false;
     window.__speechCancelled = false;
     window.__interruptClicked = false;
   });
@@ -239,7 +230,6 @@ test("system commands: a typed command reaches the browser and changes the UI (v
   const beQuietObs = await page.evaluate(() => ({
     flushedLive: window.__flushedLivePlayback,
     providerInterruptCount: window.__providerInterruptCount,
-    offlineStopped: window.__offlineSpeechStopped,
     speechCancelled: window.__speechCancelled,
     interruptClicked: window.__interruptClicked,
   }));

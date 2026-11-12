@@ -14,7 +14,7 @@
 // WHAT DELIBERATELY DID NOT MOVE. `setState`, `encodeVisionFrame` and `visionGroundingController` are
 // handed in: the encoder and the grounding controller already own their own behaviour and each has its own
 // test, so a second copy here would be a second thing to keep in step — the exact duplication this slice
-// exists to avoid. The debug / offline-speech / doctor handlers that sat BETWEEN this surface's two
+// exists to avoid. The debug / doctor handlers that sat BETWEEN this surface's two
 // discontiguous blocks stay in the host: enabling debug logging and running the doctor are not vision, and
 // a slice that swept them up because they were nearby would be an extraction by adjacency.
 //

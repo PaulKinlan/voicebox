@@ -23,7 +23,7 @@
 //      changes the behaviour. The host must pass a closure over the global, never a captured value — the
 //      static arm refuses a snapshot wiring by name.
 //
-//   C. WHAT DID NOT MOVE STAYED PUT: the debug / offline-speech / doctor handlers were between this surface's
+//   C. WHAT DID NOT MOVE STAYED PUT: the debug / doctor handlers were between this surface's
 //      two discontiguous blocks and are NOT part of it.
 //
 //   D. THE REAL PAGE, ON A REAL STREAM (browser arm): navigator.mediaDevices is replaced with one that
@@ -321,7 +321,7 @@ test("the surface lives in the module, the host keeps the handlers that were onl
   assert.equal(listeners.length, 11, `the module owns all eleven listeners the host used to attach inline, found ${listeners.length}`);
 
   // THE HANDLERS THAT WERE BETWEEN THE TWO BLOCKS STAY IN THE HOST: they are settings, not vision.
-  for (const marker of ['if (els.settingDebugEnabled)', "if (els.settingOfflineSpeechEnabled)", "els.settingsRunDoctor?.addEventListener"]) {
+  for (const marker of ['if (els.settingDebugEnabled)', "els.settingsRunDoctor?.addEventListener"]) {
     assert.equal(FUSED.includes(marker), true, `${marker} is not part of this slice and must stay in fused.js`);
   }
 
