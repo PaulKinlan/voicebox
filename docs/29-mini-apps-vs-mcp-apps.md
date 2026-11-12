@@ -36,8 +36,8 @@ flowchart LR
 |---|---|---|---|
 | What an app is | An `.html` file on the host shelf or in the workspace | Any web page | A `ui://` resource served by an MCP server, MIME `text/html;profile=mcp-app` |
 | Who defines tools | The page | The page | The server. A view may only call them |
-| Registration API | `window.webMcp.registerTool({name, description, parameters, execute})` then `webMcp.ready()` | `document.modelContext.registerTool({name, description, inputSchema, execute, annotations}, {signal})` | Server `tools/list`, tool carries `_meta.ui.resourceUri` |
-| Unregistering | Not supported; tools live until reload | Abort the `signal` | Server `listChanged` |
+| Registration API | `document.modelContext.registerTool({name, description, inputSchema, execute}, {signal})`; `window.webMcp` kept as an alias | `document.modelContext.registerTool({name, description, inputSchema, execute, annotations}, {signal})` | Server `tools/list`, tool carries `_meta.ui.resourceUri` |
+| Unregistering | Abort the `signal` | Abort the `signal` | Server `listChanged` |
 | Tool result | Any JSON value, 64 KiB cap | A string | MCP content and `structuredContent` |
 | Schema dialect | Strict allowlisted subset of JSON Schema, max 16 tools | JSON Schema | JSON Schema |
 | Transport | Custom messages over a private `MessagePort` (`register_tool`, `call_tool`, `tool_result`) | Browser-internal | JSON-RPC over `postMessage` (`ui/initialize`, `ui/notifications/tool-input`, `tools/call`, ...) |
@@ -60,7 +60,7 @@ flowchart LR
 1. **The app cannot speak first.** A Mini-App has no way to tell the model that the user clicked something. A game cannot say "the player lost", and a form cannot submit. MCP Apps has `ui/message` and `ui/update-model-context` for exactly this. For a voice product this is the largest functional gap.
 2. **No declared network or permission policy.** *Network: done (voicebox-beads-cwx5.16), see [17-mini-apps-architecture.md](17-mini-apps-architecture.md) section 2.2. Device permissions are still not declared.* The inner frame was loaded with `srcdoc` and the server's CSP is report-only, so a Mini-App could load or beacon to any origin. MCP Apps makes the app declare its origins and denies by default.
 3. **The fetch relay undoes the sandbox.** *Done (voicebox-beads-j6im): the relay is now a read allowlist plus user-approved host actions.* A sandboxed app can reach host `/api` routes through the bridge (voicebox-beads-j6im). MCP Apps has no equivalent: a view can only call tools the host chooses to expose with `visibility: ["app"]`.
-4. **A bespoke API.** `window.webMcp` with `parameters` matches no published draft. WebMCP now uses `document.modelContext` and `inputSchema`, with `navigator.modelContext` deprecated in Chrome 150.
+4. **A bespoke API.** *Done (voicebox-beads-cwx5.12): the SDK now exposes `document.modelContext.registerTool` with `inputSchema` and abort signals.* `window.webMcp` with `parameters` matches no published draft. WebMCP now uses `document.modelContext` and `inputSchema`, with `navigator.modelContext` deprecated in Chrome 150.
 5. **No portability.** A Mini-App runs nowhere else, and nothing built elsewhere runs in Voicebox.
 
 ## Recommendation

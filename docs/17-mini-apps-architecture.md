@@ -45,7 +45,7 @@ An untrusted mini-app executes arbitrary HTML, CSS, and JavaScript. The sandbox 
 │ │ │ Origin: "null" (Opaque Sandbox Origin)                         │ │ │
 │ │ │                                                                │ │ │
 │ │ │ • Verifies event.source === window.parent on handshake         │ │ │
-│ │ │ • Registers tools via window.webMcp.registerTool(...)          │ │ │
+│ │ │ • Registers tools via document.modelContext.registerTool(...)  │ │ │
 │ │ │ • Communicates exclusively over transferred MessagePort        │ │ │
 │ │ └────────────────────────────────────────────────────────────────┘ │ │
 │ └────────────────────────────────────────────────────────────────────┘ │
@@ -111,15 +111,15 @@ Rules for an entry: an `https://` or `wss://` origin, optionally with a port or 
 
 `tests/app-network-policy.test.mjs` pins the parser, the validation and the policy text; `tests/mini-app-network.test.mjs` mounts apps in a real browser, attaches to the sandboxed frame's own target and asserts which hosts its requests actually reached before and after Allow.
 
-## 3. Authoring Mini-Apps with Web MCP (`window.webMcp`)
+## 3. Authoring Mini-Apps with WebMCP (`document.modelContext`)
 
-The bridge automatically injects `public/mini-app-sdk.js` into the inner frame right after `<!doctype html>` (preserving `CSS1Compat` Standards Mode). Mini-apps expose interactive tools to the voice assistant using `window.webMcp.registerTool()`:
+A Mini-App is a WebMCP page (`voicebox-beads-cwx5.12`). The bridge injects the SDK into the inner frame right after the network policy, and the app registers tools with the API from the [WebMCP draft](https://webmachinelearning.github.io/webmcp/):
 
 ```javascript
-window.webMcp.registerTool({
+await document.modelContext.registerTool({
   name: "set_score",
   description: "Add points to a team on the scoreboard",
-  parameters: {
+  inputSchema: {
     type: "object",
     properties: {
       team: { type: "string", enum: ["home", "away"] },
@@ -127,19 +127,32 @@ window.webMcp.registerTool({
     },
     required: ["team", "points"]
   },
-  execute: async ({ team, points }) => {
+  async execute({ team, points }, { signal }) {
     const el = document.getElementById(`${team}-score`);
     el.textContent = String(Number(el.textContent) + points);
     return { ok: true, currentScore: Number(el.textContent) };
   }
 });
-
-// Signal that tool registration is complete
-window.webMcp.ready();
 ```
 
+What the SDK implements, and where it is narrower than the draft:
+
+| | Behaviour |
+| --- | --- |
+| `registerTool(tool, { signal })` | Returns a promise that settles on the **host's** answer. A duplicate name, a missing description or a schema the host refuses rejects with `InvalidStateError`. |
+| Unregistering | Abort the `signal` passed to `registerTool`; the tool leaves the room's catalogue. |
+| `execute(input, { signal })` | The signal aborts when the host abandons the call (the 5 s bound). |
+| Result | Any JSON value, including a plain string, up to 64 KiB. |
+| Tool name | The host accepts `^[a-zA-Z0-9_-]{1,64}$`, narrower than the draft's 128 characters with `.`; a longer or dotted name is rejected. |
+| `inputSchema` | The strict subset below; an unsupported keyword is a rejection, not a silent drop. |
+| Not implemented | `getTools`, `executeTool`, the `toolchange` events, `outputSchema`, `annotations`, `exposedTo`. |
+
+`document.modelContext` is defined as an own property so it shadows a browser-native implementation: a tool registered with the browser itself would never reach the room. `navigator.modelContext`, the name earlier drafts used, is the same object.
+
+**Older names.** `window.webMcp.registerTool({ ..., parameters })` and `window.webMcp.ready()` (also `window.voicebox`) still work and keep their older behaviour: a synchronous throw on a malformed tool, and a second registration of a name replacing the first. The built-in apps still use them. `tests/mini-app-webmcp-surface.test.mjs` drives both surfaces in a real browser.
+
 ### Tool Lifecycle during a Voice Session
-1. **Registration**: The inner app calls `window.webMcp.registerTool(...)`, sending `{ type: "register_tool", tool }` over the private `MessagePort`.
+1. **Registration**: The inner app calls `document.modelContext.registerTool(...)`, sending `{ type: "register_tool", regId, tool }` over the private `MessagePort`; the bridge answers `{ type: "register_result", regId, ok, error }`.
 2. **Schema Validation (`core/mini-app.ts`)**: `validateWebMcpTool()` verifies the tool name (`^[a-zA-Z0-9_-]{1,64}$`), description (≤ 1,024 chars), JSON Schema parameters (`type: "object"`), and per-app tool count (`maxTools: 16`).
 3. **Live Voice Exposure**: `MiniAppRegistry` converts registered tools into function declarations (`toolsToFunctionDeclarations()`) for the active live voice session.
 4. **Voice Execution & Host Argument Validation**: When the user says *"Add three points to the home team"*, the voice model calls `set_score`. The host (`server.mjs`) and outer bridge validate the incoming arguments against the tool's declared JSON schema (`validateMiniAppToolArgs()`). Parameter schemas are strictly validated at registration against an enforceably validated subset:
