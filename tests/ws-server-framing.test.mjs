@@ -7,10 +7,15 @@
 // accumulate whatever came. It also accepted frames RFC 6455 forbids (unmasked, RSV bits set, oversized control
 // frames, reserved opcodes, non-minimal lengths). Each case below is a header a peer can send in ten bytes, driven
 // at the socket the server actually wraps: the assertion is what the server does NEXT, before any payload exists.
+//
+// THIS FILE IS IN THE UNIT LANE ON PURPOSE, and that is why it drives a fake duplex rather than a listening socket:
+// the fast gate is the landing contract, so the framing DECISIONS have to run there (a security fix whose tests never
+// run in the fast gate is a fix nobody gates). a listening server is classified as a server signal by
+// scripts/test-lanes.mjs, and @lane may not override that signal — so the one arm that needs a REAL stream lives in
+// tests/live-screen-vision.test.mjs beside the other ws-server socket tests, where the server lane runs it.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import net from "node:net";
 import { wrapSocket } from "../lib/ws-server.mjs";
 
 /** A duplex socket stand-in: `data` in, writes and end recorded. Same shape as tests/live-screen-vision.test.mjs. */
@@ -160,44 +165,4 @@ test("a legal 4 MB message is still inside the bound — the limit refuses claim
   assert.equal(socket.ended, false, "a message at the bound must be accepted, or the bound is a lie about its size");
   assert.equal(messages.length, 1);
   assert.equal(messages[0].length, exactly.length);
-});
-
-test("over a REAL socket, a 1 TiB claim is answered from its 14-byte header — nothing is buffered on trust (voicebox-beads-r93n)", async () => {
-  // The fake-socket cases prove the DECISION. This one proves the decision arrives over real stream semantics, where
-  // the defect lived: a peer sends the header and then nothing at all, and the server must close with 1009 anyway.
-  // Against the old reader this test hangs until the bound below expires, because it waits for a terabyte.
-  const server = net.createServer((socket) => wrapSocket(socket));
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address();
-  const client = net.connect(port, "127.0.0.1");
-  try {
-    await new Promise((resolve, reject) => {
-      client.once("connect", resolve);
-      client.once("error", reject);
-    });
-    // FIN + binary, masked, 8-byte length declaring 1 TiB, then the mask key: 14 bytes, and no payload ever.
-    const header = Buffer.alloc(14);
-    header[0] = 0x82;
-    header[1] = 0x80 | 127;
-    header.writeBigUInt64BE(BigInt(2 ** 40), 2);
-    header.writeUInt32BE(0x11223344, 10);
-    client.write(header);
-
-    const closeCodeSeen = await new Promise((resolve, reject) => {
-      let seen = Buffer.alloc(0);
-      const timer = setTimeout(() => reject(new Error(`no answer to a header-only 1 TiB claim within 3000ms (buffered ${seen.length} bytes)`)), 3000);
-      client.on("data", (chunk) => {
-        seen = Buffer.concat([seen, chunk]);
-        if (seen.length >= 4 && seen[0] === 0x88) {
-          clearTimeout(timer);
-          resolve(seen.readUInt16BE(2));
-        }
-      });
-      client.on("error", reject);
-    });
-    assert.equal(closeCodeSeen, 1009, "the close must name message-too-big, from the header alone");
-  } finally {
-    client.destroy();
-    await new Promise((resolve) => server.close(resolve));
-  }
 });

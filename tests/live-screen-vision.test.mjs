@@ -6,6 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import net from "node:net";
 import { wrapSocket } from "../lib/ws-server.mjs";
 import { liveSystemInstruction } from "../lib/commands.mjs";
 import { createGeminiProvider } from "../lib/live-providers/gemini.mjs";
@@ -295,5 +296,47 @@ test("createGeminiProvider: enables inputAudioTranscription, TURN_INCLUDES_ALL_I
   } finally {
     if (prevKey === undefined) delete process.env.GEMINI_API_KEY;
     else process.env.GEMINI_API_KEY = prevKey;
+  }
+});
+
+/**
+ * The REAL-STREAM half of voicebox-beads-r93n's proof, in the server lane because it listens: 14 bytes in — a
+ * masked binary header declaring 1 TiB, then nothing at all — and the server must answer 1009 from the header.
+ * Against the reader this bead replaced, this test waits out its own 3s bound and reports "buffered 0 bytes",
+ * which is exactly what the defect was: a peer's claim was an instruction to buffer.
+ */
+test("ws-server: a 1 TiB claim is answered from its 14-byte header, with no payload ever sent (voicebox-beads-r93n)", async () => {
+  const server = net.createServer((socket) => wrapSocket(socket));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const client = net.connect(port, "127.0.0.1");
+  try {
+    await new Promise((resolve, reject) => {
+      client.once("connect", resolve);
+      client.once("error", reject);
+    });
+    const header = Buffer.alloc(14);
+    header[0] = 0x82; // FIN + binary
+    header[1] = 0x80 | 127; // masked, 8-byte length
+    header.writeBigUInt64BE(BigInt(2 ** 40), 2);
+    header.writeUInt32BE(0x11223344, 10); // mask key
+    client.write(header);
+
+    const closeCodeSeen = await new Promise((resolve, reject) => {
+      let seen = Buffer.alloc(0);
+      const timer = setTimeout(() => reject(new Error(`no answer to a header-only 1 TiB claim within 3000ms (buffered ${seen.length} bytes)`)), 3000);
+      client.on("data", (chunk) => {
+        seen = Buffer.concat([seen, chunk]);
+        if (seen.length >= 4 && seen[0] === 0x88) {
+          clearTimeout(timer);
+          resolve(seen.readUInt16BE(2));
+        }
+      });
+      client.on("error", reject);
+    });
+    assert.equal(closeCodeSeen, 1009, "the close must name message-too-big, from the header alone");
+  } finally {
+    client.destroy();
+    await new Promise((resolve) => server.close(resolve));
   }
 });
