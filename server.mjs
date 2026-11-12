@@ -5627,7 +5627,15 @@ server.on("upgrade", (req, socket) => {
         socket: ws,
       };
     } catch (e) {
-      ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
+      // FATAL, AND NAMED (voicebox-beads-cwx5.6): this frame is the only thing the page learns about a session
+      // that never started. `fatal` separates it from the dropped-frame notices below ("the session is fine"),
+      // and `code` lets the page offer the remedy — for a missing key, the Settings field — instead of a wait.
+      ws.send(JSON.stringify({
+        type: "error", fatal: true,
+        code: typeof e?.code === "string" ? e.code : "live-session-failed",
+        ...(typeof e?.provider === "string" ? { provider: e.provider } : {}),
+        error: e?.message ?? String(e),
+      }));
       ws.close(1011, "live session failed to start");
       return;
     }

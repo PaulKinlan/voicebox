@@ -688,3 +688,45 @@ test("barge-in: the MODEL's own interrupt flushes the buffered tail without aski
   assert.equal(snap.capture, true, "capture keeps running");
   assert.equal(interruptsSent(socket).length, 0, "the model already stopped: the page must not ask it to stop again");
 });
+
+// ── A session that cannot START (voicebox-beads-cwx5.6) ──────────────────────────────────────────────
+// Measured on a fresh clone with no provider key: the host sent {type:"error", error:"GEMINI_API_KEY is not
+// set…"} and closed the socket, the client read `msg.message` (absent), and the stage sat on "Waiting for the
+// model · 0 frame(s) held until setup completes" for as long as anyone looked at it.
+test("start failure: a fatal error frame is reported with its remedy, survives the close, and is never 'Waiting for the model'", async () => {
+  const { client, events, socket } = makeClient();
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
+  client.handleMessage(JSON.stringify({ type: "error", fatal: true, code: "provider-key-missing", provider: "gemini", error: "GEMINI_API_KEY is not set — the live session cannot start" }));
+  socket.onclose?.({ code: 1011, reason: "live session failed to start" });
+
+  const fatal = events.errors.find((e) => e.fatal);
+  assert.ok(fatal, "the page is told this is fatal, not a malformed frame");
+  assert.equal(fatal.code, "provider-key-missing");
+  assert.equal(fatal.provider, "gemini");
+  assert.match(client.label(), /No Gemini API key is set on this host.*Add one in Settings/, "the label names the remedy");
+  assert.doesNotMatch(client.label(), /connection closed/, "the close that follows must not replace the reason");
+
+  // The microphone finishes opening AFTER the refusal — the order the real page produced.
+  await client.startCapture();
+  assert.doesNotMatch(client.label(), /Waiting for the model/, "a refused session is not waiting for anything");
+  assert.match(client.label(), /No Gemini API key/);
+  assert.equal(client.snapshot().capture, false, "the microphone is released: nothing is listening");
+});
+
+test("start failure: the host's `error` field is read on a non-fatal notice too, and the session stays up", () => {
+  const { client, events } = makeClient();
+  client.handleMessage(JSON.stringify({ type: "error", error: "dropped malformed audio frame — odd byte length (the session is fine)" }));
+  assert.match(events.errors.at(-1).message, /dropped malformed audio frame/, "not the placeholder 'server error'");
+  assert.equal(events.errors.at(-1).fatal, false);
+  assert.equal(client.snapshot().startFailure, null);
+});
+
+test("start failure: attaching a new socket clears it, so the next press starts clean", () => {
+  const { client } = makeClient();
+  client.handleMessage(JSON.stringify({ type: "error", fatal: true, code: "provider-key-missing", provider: "openai", error: "OPENAI_API_KEY is not set" }));
+  assert.match(client.label(), /No OpenAI API key/);
+  client.attachSocket(fakeSocket());
+  assert.equal(client.snapshot().startFailure, null);
+  assert.equal(client.snapshot().sessionEnded, false);
+  assert.doesNotMatch(client.label(), /No OpenAI API key/, "the old refusal does not outlive its connection");
+});

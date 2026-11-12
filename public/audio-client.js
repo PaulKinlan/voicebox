@@ -98,6 +98,7 @@ export function createAudioClient({
     phase: "idle", // idle | starting | listening | agent-speaking | error
     ready: false, // the server said setupComplete
     sessionEnded: false, // the upstream (model) session is gone
+    startFailure: null, // { code, provider, message } when the host said the session could not START
     model: "",
     gatedFrames: 0, // how many frames the server held before the gate opened
     capture: false,
@@ -263,6 +264,10 @@ export function createAudioClient({
         : `The model reported an error (${state.providerError.reason}) · your microphone is off, so nothing is being sent`;
     }
     if (state.phase === "error") return state.lastError || "Audio error";
+    // A session that has ENDED is not waiting for anything. Capture can finish starting after the host has
+    // already refused the session, and the phase it reports must not turn the refusal back into
+    // "Waiting for the model" (voicebox-beads-cwx5.6).
+    if (state.sessionEnded) return state.lastError || "Live session ended. Press the mic to start a new session.";
     if (state.phase === "starting") return state.capture ? "Connecting…" : "Press to speak";
     if (state.phase === "agent-speaking") {
       return state.capture
@@ -370,7 +375,27 @@ export function createAudioClient({
       return;
     }
     if (msg?.type === "error") {
-      reject(String(msg.message ?? "server error"), { frameKind: "control-error" });
+      // The host spells the sentence `error` and the live session spells it `message`; read both, or the
+      // person is told "server error" while the real reason sits unread in the frame (voicebox-beads-cwx5.6).
+      const raw = String(msg.error ?? msg.message ?? "server error");
+      // A missing key is the first thing a new install meets, so it gets the remedy, not the variable name.
+      const providerNames = { gemini: "Gemini", openai: "OpenAI", claude: "Anthropic" };
+      const text = msg.fatal === true && msg.code === "provider-key-missing"
+        ? `No ${providerNames[msg.provider] ?? "provider"} API key is set on this host, so voice cannot start. Add one in Settings, then press the mic again.`
+        : raw;
+      if (msg.fatal === true) {
+        // The session never started. That is not a refused frame on a healthy connection: record WHY, so the
+        // close that follows keeps this sentence instead of replacing it with "connection closed (1011)".
+        state.startFailure = { code: String(msg.code ?? "live-session-failed"), provider: msg.provider ?? null, message: text };
+        state.lastError = text;
+        logger.warn?.(`[audio-client] live session did not start: ${text}`);
+        // Ended NOW, not when the close arrives: the frame is the verdict, and a label read between the two
+        // must already say so.
+        endSession("start-failed", { reason: text });
+        onError(new Error(text), { fatal: true, code: state.startFailure.code, provider: state.startFailure.provider });
+        return;
+      }
+      reject(text, { frameKind: "control-error" });
       return;
     }
     if (msg?.type === "system_error") {
@@ -514,10 +539,13 @@ export function createAudioClient({
     state.ready = false;
     state.providerError = null;
     const reason = String(detail?.reason ?? detail?.message ?? kind);
-    state.lastError =
-      `Live session ended (${reason}). ` +
-      (state.capture ? "Your microphone is still on, but nothing is listening. " : "") +
-      "Press the mic to start a new session.";
+    // A session that never started already has its reason from the host; the socket closing afterwards is
+    // the consequence, not the news (voicebox-beads-cwx5.6).
+    state.lastError = state.startFailure
+      ? state.startFailure.message
+      : `Live session ended (${reason}). ` +
+        (state.capture ? "Your microphone is still on, but nothing is listening. " : "") +
+        "Press the mic to start a new session.";
     // A dead session must not keep playing queued audio.
     for (const source of sources) {
       try { source.onended = null; source.stop(); } catch { /* already stopped */ }
@@ -548,6 +576,7 @@ export function createAudioClient({
   function attachSocket(next) {
     // A new socket is a new session: clear the ended state from the last one.
     state.sessionEnded = false;
+    state.startFailure = null;
     state.providerError = null;
     state.lastError = "";
     // THE RATE BELONGS TO THE CONNECTION, and this line is the defect astra found by driving the real page
@@ -684,7 +713,15 @@ export function createAudioClient({
         }
       };
       state.capture = true;
-      emit(state.playbackActive ? "agent-speaking" : "listening");
+      // The session may have been refused while the microphone was still opening. Do not report "listening"
+      // to nobody: stay in the error the host named (voicebox-beads-cwx5.6).
+      if (state.startFailure) {
+        // Nothing will ever listen on this session, so the microphone is released rather than left open.
+        await stopCapture();
+        emit("error", { sessionEnded: true, startFailure: state.startFailure });
+        return;
+      }
+      emit(state.sessionEnded ? "error" : state.playbackActive ? "agent-speaking" : "listening");
     } catch (error) {
       // Report it here, not as an unhandled rejection: the same sentence is
       // written by the page adapter's catch, so both paths agree.

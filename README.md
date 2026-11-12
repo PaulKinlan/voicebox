@@ -23,6 +23,7 @@ The server starts at `http://localhost:8787` (bound to `127.0.0.1`; override por
 ### 3. Configure API Keys
 You can configure provider keys in either of two ways:
 - **In the Browser UI (Recommended)**: Click **Settings (⚙)** in the top bar and paste your Gemini, OpenAI, or Anthropic API key. Keys are saved to the host's `0600` credential store (`GET` / `PUT /api/keys`) and take effect immediately without restarting the server.
+- **On First Run, the Page Takes You There**: Pressing the microphone with no key for the live provider does not leave you waiting. The host answers the `/live` connection with a fatal `error` frame (`code: "provider-key-missing"`), the stage says which provider's key is missing, the microphone is released, and **Settings** opens with that key's field focused (`public/audio-client.js`, `public/live-voice.js`).
 - **Via Environment Variables**:
   ```bash
   # Gemini Multimodal Live (default: models/gemini-3.8-live)

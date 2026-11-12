@@ -214,6 +214,20 @@ const audioClient = createAudioClient({
     if (info?.fatal) {
       window.__voiceboxOnLiveError?.(error, info);
     }
+    if (info?.fatal && info.code === "provider-key-missing") {
+      // FIRST RUN (voicebox-beads-cwx5.6): the host has no key for the live provider. Nothing is listening, so
+      // the microphone is released, and the person is taken to the field that fixes it rather than left to
+      // find the gear. The sentence itself comes from the audio client's label and stays on the stage.
+      void audioClient.stopCapture().catch(() => {});
+      const field = document.getElementById(`api-key-${info.provider === "claude" ? "anthropic" : info.provider}`)
+        ?? document.getElementById("settings-api-keys");
+      const settings = document.getElementById("settings");
+      if (settings && !settings.open) document.getElementById("settings-open")?.click();
+      requestAnimationFrame(() => {
+        field?.scrollIntoView?.({ block: "center" });
+        field?.focus?.({ preventScroll: true });
+      });
+    }
   },
   onDiagnostic: (d) => {
     recordDebug({ type: "audio.diagnostic", detail: d });
