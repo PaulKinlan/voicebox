@@ -82,6 +82,35 @@ Verification: `tests/mini-app-relay-policy.test.mjs` drives the real bridge modu
 
 ---
 
+## 2.2 No Network Unless Declared and Allowed (`public/app-network-policy.mjs`, `voicebox-beads-cwx5.16`)
+
+The sandbox keeps an app away from the host. It does not keep the user's data away from the internet: until this policy the inner frame ran with no content security policy, so app code could load a script from, or send a tool call's arguments to, any origin.
+
+Every app document now starts with a default-deny CSP, injected as the first element after the doctype (a `<meta>` policy governs only what is parsed after it, so "inside `<head>`" is not early enough). With no declaration an app can run its own inline script and style, use `data:` and `blob:` images, and load files from the Voicebox server itself (the built-in apps import their modules from `/apps/`). It cannot fetch, open a socket, load a remote script, submit a form, embed a frame or open a WebRTC connection.
+
+An app that needs an outside origin declares it, using the field names MCP Apps uses for the same idea (`_meta.ui.csp`):
+
+```html
+<script type="application/voicebox-app+json">
+{ "csp": { "connectDomains": ["https://api.example.com"], "resourceDomains": ["https://cdn.jsdelivr.net"] } }
+</script>
+```
+
+| Field | Grants |
+| --- | --- |
+| `connectDomains` | `fetch`, XHR, WebSocket and EventSource to these origins (`connect-src`) |
+| `resourceDomains` | scripts, styles, images, fonts and media from these origins |
+
+Rules for an entry: an `https://` or `wss://` origin, optionally with a port or one leading wildcard label (`https://*.example.com`). Refused, with the reason shown in the app card: `http`/`ws`, a path, query or credentials, an IP address, `localhost`, a bare `*`, a wildcard over a whole top-level domain, and anything past 16 entries per list.
+
+**A declaration is a request, not a grant.** Declarations are often written by a model. The room (`public/components/mini-app-network.mjs`) mounts the app offline and shows a bar in the app card, outside the app's frame, naming every origin, with **Allow** and **Keep offline**. Allow stores the approval in `localStorage` (`voicebox.mini_app_network_approvals.v1`) for that app id and that exact set of origins, then remounts the app with the grant. If the app later asks for a different set, the stored approval no longer matches and the person is asked again. Keep offline lasts until the page is reloaded. The bridge narrows whatever grant it is handed to what the document itself declares, so a grant can never add an origin.
+
+**A blocked load is visible.** The injected SDK listens for `securitypolicyviolation` and the room shows "Blocked: this app tried to reach …", so an app that needs an undeclared CDN says so instead of looking broken.
+
+**Known gap: navigation.** CSP has no directive that stops a frame navigating itself (`location.href = "https://elsewhere/?" + data`, a link click, a meta refresh). The app dies when it does this, but the URL is sent. Closing it needs the bridge to detect the navigation and tear the frame down, or a network-level control; it is tracked as its own bead.
+
+`tests/app-network-policy.test.mjs` pins the parser, the validation and the policy text; `tests/mini-app-network.test.mjs` mounts apps in a real browser, attaches to the sandboxed frame's own target and asserts which hosts its requests actually reached before and after Allow.
+
 ## 3. Authoring Mini-Apps with Web MCP (`window.webMcp`)
 
 The bridge automatically injects `public/mini-app-sdk.js` into the inner frame right after `<!doctype html>` (preserving `CSS1Compat` Standards Mode). Mini-apps expose interactive tools to the voice assistant using `window.webMcp.registerTool()`:

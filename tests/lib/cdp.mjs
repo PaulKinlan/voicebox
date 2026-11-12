@@ -260,6 +260,9 @@ export async function launch({ width = 1000, height = 800, profile = null, fakeM
     sendTo: (targetSessionId, method, params) => send(method, params, targetSessionId),
     // Read-only protocol evidence: observe real frames without patching the page's WebSocket.
     events: (method) => events.filter((event) => event.sessionId === sessionId && event.method === method).map((event) => event.params),
+    // The same evidence from ANOTHER session, e.g. an out-of-process iframe attached with Target.setAutoAttach:
+    // a sandboxed srcdoc frame is its own target, and its requests never appear in the page's own Network events.
+    eventsFrom: (targetSessionId, method) => events.filter((event) => event.sessionId === targetSessionId && event.method === method).map((event) => event.params),
     async close() {
       if (closed) return;
       closed = true;

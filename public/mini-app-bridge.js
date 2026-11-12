@@ -8,11 +8,15 @@
 //     page's origin (voicebox-beads-zus7), never by a string prefix; public/relay-policy.mjs then decides WHAT
 //     may be carried: approved reads are relayed, a host MUTATION is never fetched here at all — it goes to the
 //     room as `host_action_request` and only a person's approval makes it happen (voicebox-beads-j6im).
+//   - The app document runs under a default-deny network CSP (public/app-network-policy.mjs, voicebox-beads-cwx5.16):
+//     the policy is the first thing the document parses, it admits only the declared origins the room granted,
+//     and a blocked load is reported to the room by origin so the person sees why an app looks broken.
 //   - Mediates tool declarations, capability limits (64KB max, 5s timeout), and Web MCP execution over MessagePort.
 
 import { relayTarget } from "./relay-target.mjs";
 import { relayBody } from "./relay-body.mjs";
 import { relayPolicy } from "./relay-policy.mjs";
+import { applyNetworkPolicy, blockedOrigin } from "./app-network-policy.mjs";
 
 const inner = document.getElementById("inner-app");
 let currentAppId = null;
@@ -268,6 +272,16 @@ const INJECTED_SDK = `<script>
       }
     }
   } catch (err) {}
+
+  // A load the network policy blocked (voicebox-beads-cwx5.16). Without this an app that needs an undeclared
+  // origin just looks broken; the bridge passes the ORIGIN on so the room can say which declaration is missing.
+  document.addEventListener("securitypolicyviolation", function(event) {
+    postToBridge({
+      type: "csp_violation",
+      blockedURI: String(event.blockedURI || "").slice(0, 512),
+      directive: String(event.effectiveDirective || event.violatedDirective || "").slice(0, 64)
+    });
+  });
 
   // Signal to the outer mediator that inner frame script is loaded and ready for port transfer
   if (window.parent && window.parent !== window) {
@@ -1124,6 +1138,20 @@ function handleInnerMessage(event) {
     return;
   }
 
+  if (data.type === "csp_violation") {
+    // Reported once per origin and bounded per load: app code chooses how often this fires.
+    const origin = blockedOrigin(data.blockedURI);
+    if (!origin || reportedBlocks.has(origin) || reportedBlocks.size >= MAX_REPORTED_BLOCKS) return;
+    reportedBlocks.add(origin);
+    postToHost({
+      type: "network_blocked",
+      appId: currentAppId,
+      origin,
+      directive: typeof data.directive === "string" ? data.directive.slice(0, 64) : "",
+    });
+    return;
+  }
+
   if (data.type === "register_tool") {
     if (registeredTools.size >= BOUNDS.maxTools) {
       console.warn(`[mini-app-bridge] max tools limit reached (${BOUNDS.maxTools}) for app ${currentAppId}`);
@@ -1254,10 +1282,23 @@ function dispatchCallTool(data) {
   });
 }
 
-function injectSdkIntoHtml(rawHtml) {
+/** Origins already reported as blocked for the app that is loaded now. */
+const reportedBlocks = new Set();
+const MAX_REPORTED_BLOCKS = 8;
+
+/**
+ * The document the inner frame parses: the network policy, then the SDK, then the app. The policy's placement
+ * and the narrowing of the room's `grant` to what the app declares are public/app-network-policy.mjs's.
+ */
+function injectSdkIntoHtml(rawHtml, grant) {
   const src = typeof rawHtml === "string" && rawHtml.trim()
     ? rawHtml
     : "<!doctype html><html><head></head><body></body></html>";
+  reportedBlocks.clear();
+  return applyNetworkPolicy(withSdk(src), grant, { hostOrigin: location.origin });
+}
+
+function withSdk(src) {
   const baseStyle = `<style id="voicebox-mini-app-base">html, body { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }</style>`;
   const payload = baseStyle + "\n" + INJECTED_SDK;
   const doctypeMatch = src.match(/^\s*<!doctype\s+[^>]*>/i);
@@ -1325,7 +1366,7 @@ window.addEventListener("message", (event) => {
         appChannelTransferred = false;
 
         const rawHtml = msg.html || "<!doctype html><html><body></body></html>";
-        inner.srcdoc = injectSdkIntoHtml(rawHtml);
+        inner.srcdoc = injectSdkIntoHtml(rawHtml, msg.network);
       } else if (msg.type === "call_tool") {
         dispatchCallTool(msg);
       } else if (msg.type === "host_action_state") {
@@ -1357,7 +1398,7 @@ window.addEventListener("message", (event) => {
 
     // Inject SDK while preserving Standards Mode doctype
     const rawHtml = data.html || "<!doctype html><html><body></body></html>";
-    inner.srcdoc = injectSdkIntoHtml(rawHtml);
+    inner.srcdoc = injectSdkIntoHtml(rawHtml, data.network);
   } else if (data.type === "call_tool") {
     dispatchCallTool(data);
   }

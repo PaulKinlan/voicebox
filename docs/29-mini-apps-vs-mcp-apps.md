@@ -42,7 +42,7 @@ flowchart LR
 | Schema dialect | Strict allowlisted subset of JSON Schema, max 16 tools | JSON Schema | JSON Schema |
 | Transport | Custom messages over a private `MessagePort` (`register_tool`, `call_tool`, `tool_result`) | Browser-internal | JSON-RPC over `postMessage` (`ui/initialize`, `ui/notifications/tool-input`, `tools/call`, ...) |
 | Sandbox | Same-origin bridge iframe wrapping an inner `sandbox="allow-scripts"` opaque-origin iframe | The page's own origin | Web hosts must use a sandbox proxy iframe on a different origin wrapping the view |
-| Network policy | No enforced CSP on the inner frame; a same-origin fetch relay to host `/api` | Normal page rules | Declared per resource: `_meta.ui.csp.connectDomains`, `resourceDomains`; default deny |
+| Network policy | Default-deny CSP on the inner frame; the app declares `connectDomains` and `resourceDomains` and the user allows them once per app; host `/api` only through a policed relay | Normal page rules | Declared per resource: `_meta.ui.csp.connectDomains`, `resourceDomains`; default deny |
 | Device permissions | `allow="autoplay"` only | Normal page rules | Declared: camera, microphone, geolocation, clipboardWrite |
 | App talks to the model | No. The app can only answer tool calls | No | Yes: `ui/message` and `ui/update-model-context` |
 | Host pushes data to the app | Only as tool-call arguments | Only as tool-call arguments | Yes: streamed tool input, tool result, host context (theme, size) |
@@ -58,8 +58,8 @@ flowchart LR
 ## Where Voicebox is behind
 
 1. **The app cannot speak first.** A Mini-App has no way to tell the model that the user clicked something. A game cannot say "the player lost", and a form cannot submit. MCP Apps has `ui/message` and `ui/update-model-context` for exactly this. For a voice product this is the largest functional gap.
-2. **No declared network or permission policy.** The inner frame is loaded with `srcdoc` and the server's CSP is report-only, so a Mini-App can load or beacon to any origin. MCP Apps makes the app declare its origins and denies by default.
-3. **The fetch relay undoes the sandbox.** A sandboxed app can reach host `/api` routes through the bridge (voicebox-beads-j6im). MCP Apps has no equivalent: a view can only call tools the host chooses to expose with `visibility: ["app"]`.
+2. **No declared network or permission policy.** *Network: done (voicebox-beads-cwx5.16), see [17-mini-apps-architecture.md](17-mini-apps-architecture.md) section 2.2. Device permissions are still not declared.* The inner frame was loaded with `srcdoc` and the server's CSP is report-only, so a Mini-App could load or beacon to any origin. MCP Apps makes the app declare its origins and denies by default.
+3. **The fetch relay undoes the sandbox.** *Done (voicebox-beads-j6im): the relay is now a read allowlist plus user-approved host actions.* A sandboxed app can reach host `/api` routes through the bridge (voicebox-beads-j6im). MCP Apps has no equivalent: a view can only call tools the host chooses to expose with `visibility: ["app"]`.
 4. **A bespoke API.** `window.webMcp` with `parameters` matches no published draft. WebMCP now uses `document.modelContext` and `inputSchema`, with `navigator.modelContext` deprecated in Chrome 150.
 5. **No portability.** A Mini-App runs nowhere else, and nothing built elsewhere runs in Voicebox.
 
@@ -76,7 +76,7 @@ In order, with the first three before launch:
 
 ## What this would break
 
-Nothing, if the old `window.webMcp` names are kept as aliases. Step 2 changes behaviour for any Mini-App that uses the fetch relay; the three built-in apps in `public/apps/` need checking.
+Nothing, if the old `window.webMcp` names are kept as aliases. Step 2 changes behaviour for any Mini-App that uses the fetch relay; the three built-in apps in `public/apps/` need checking. Step 3 breaks any existing Mini-App that loads a script, font or image from a CDN, or calls an outside API, until it declares the origin and the user allows it; the room names the blocked origin so the fix is obvious.
 
 ## Sources
 

@@ -229,6 +229,36 @@
   outline-offset: 2px;
 }
 
+/* Network policy (voicebox-beads-cwx5.16): the Allow / Keep offline question reuses the consent bar above;
+   the blocked-load notice is quieter because nothing is being asked. */
+.mini-app-network-notice {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 12px;
+  border-block-end: 1px solid var(--line);
+  background: color-mix(in srgb, var(--text) 4%, var(--card));
+}
+.mini-app-network-notice .mini-app-consent-detail {
+  font-family: inherit;
+}
+.mini-app-network-dismiss {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+}
+.mini-app-network-dismiss:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 2px;
+}
+
 /* ── Anchored Mini-App Floating Bubble Dock ──────────────────────────── */
 .mini-app-dock {
   position: fixed;
