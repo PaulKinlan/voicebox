@@ -44,7 +44,7 @@ flowchart LR
 | Sandbox | Same-origin bridge iframe wrapping an inner `sandbox="allow-scripts"` opaque-origin iframe | The page's own origin | Web hosts must use a sandbox proxy iframe on a different origin wrapping the view |
 | Network policy | Default-deny CSP on the inner frame; the app declares `connectDomains` and `resourceDomains` and the user allows them once per app; host `/api` only through a policed relay | Normal page rules | Declared per resource: `_meta.ui.csp.connectDomains`, `resourceDomains`; default deny |
 | Device permissions | `allow="autoplay"` only | Normal page rules | Declared: camera, microphone, geolocation, clipboardWrite |
-| App talks to the model | No. The app can only answer tool calls | No | Yes: `ui/message` and `ui/update-model-context` |
+| App talks to the model | Yes: `voicebox.sendMessage` and `voicebox.updateModelContext`, framed as the app's and rate-limited | No | Yes: `ui/message` and `ui/update-model-context` |
 | Host pushes data to the app | Only as tool-call arguments | Only as tool-call arguments | Yes: streamed tool input, tool result, host context (theme, size) |
 | Display modes | Pop-over window, collapse, full screen, set by the host | n/a | `inline`, `fullscreen`, `pip`, requested by the view |
 | Runs elsewhere | Only in Voicebox | Any WebMCP-capable browser agent | Claude, VS Code Copilot, Goose and other MCP Apps hosts |
@@ -57,7 +57,7 @@ flowchart LR
 
 ## Where Voicebox is behind
 
-1. **The app cannot speak first.** A Mini-App has no way to tell the model that the user clicked something. A game cannot say "the player lost", and a form cannot submit. MCP Apps has `ui/message` and `ui/update-model-context` for exactly this. For a voice product this is the largest functional gap.
+1. **The app cannot speak first.** *Done (voicebox-beads-cwx5.12): `voicebox.sendMessage` and `voicebox.updateModelContext`.* A Mini-App has no way to tell the model that the user clicked something. A game cannot say "the player lost", and a form cannot submit. MCP Apps has `ui/message` and `ui/update-model-context` for exactly this. For a voice product this is the largest functional gap.
 2. **No declared network or permission policy.** *Network: done (voicebox-beads-cwx5.16), see [17-mini-apps-architecture.md](17-mini-apps-architecture.md) section 2.2. Device permissions are still not declared.* The inner frame was loaded with `srcdoc` and the server's CSP is report-only, so a Mini-App could load or beacon to any origin. MCP Apps makes the app declare its origins and denies by default.
 3. **The fetch relay undoes the sandbox.** *Done (voicebox-beads-j6im): the relay is now a read allowlist plus user-approved host actions.* A sandboxed app can reach host `/api` routes through the bridge (voicebox-beads-j6im). MCP Apps has no equivalent: a view can only call tools the host chooses to expose with `visibility: ["app"]`.
 4. **A bespoke API.** *Done (voicebox-beads-cwx5.12): the SDK now exposes `document.modelContext.registerTool` with `inputSchema` and abort signals.* `window.webMcp` with `parameters` matches no published draft. WebMCP now uses `document.modelContext` and `inputSchema`, with `navigator.modelContext` deprecated in Chrome 150.

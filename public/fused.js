@@ -3694,6 +3694,13 @@ if (els.miniAppContainer) {
     setCatalog: (next) => { catalogMiniApps = next; },
     syncReaderBubble,
     renderRead,
+    // An app's message goes to the LIVE model as framed text and nowhere else: never through send(), whose
+    // typed-turn commands ("create a file called…") act on the host.
+    sendToModel: (text) => window.__voiceboxSendLiveControl?.({ type: "text", text }) === true,
+    noteAppMessage: (title, text) => {
+      logTurn(`${title} (Mini-App): ${text}`, "sent to the voice model");
+      appendWorkActivity({ kind: "turn", label: "Mini-App", summary: `${title} told the model: “${text.slice(0, 200)}”` });
+    },
     sqehSyncMiniApps,
     launchedMiniApps,
   });

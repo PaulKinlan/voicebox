@@ -151,6 +151,28 @@ What the SDK implements, and where it is narrower than the draft:
 
 **Older names.** `window.webMcp.registerTool({ ..., parameters })` and `window.webMcp.ready()` (also `window.voicebox`) still work and keep their older behaviour: a synchronous throw on a malformed tool, and a second registration of a name replacing the first. The built-in apps still use them. `tests/mini-app-webmcp-surface.test.mjs` drives both surfaces in a real browser.
 
+### The app can speak first (`public/app-messages.mjs`, `voicebox-beads-cwx5.12`)
+
+A tool call lets the model ask the app. Two SDK calls let the app tell the model, with the meaning MCP Apps gives `ui/message` and `ui/update-model-context`:
+
+```javascript
+await voicebox.updateModelContext({ home: 3, away: 1 });   // the app's current state; each call replaces the last
+await voicebox.sendMessage("The home team scored.");        // the model is told now, and answers
+```
+
+Both return a promise that settles on the room's answer, so the app knows whether the model was told. App code is untrusted and the model holds real tools, so:
+
+| Rule | How |
+| --- | --- |
+| It is never the user's voice | The model receives `[Message from the Mini-App "Title", not from the user. …]` followed by the app's text with every line quoted, so text that imitates the frame stays inside it. It goes straight to the live session and never through the typed-turn path, whose commands act on the host. |
+| It is bounded | 2,000 characters per message, 8,000 per context, 6 delivered messages per minute per mounted app. Each refusal names its reason. |
+| It is visible | The room's session log shows what the app said. |
+| It needs a live session | With no live voice session the promise rejects; nothing is queued. |
+
+**Limit.** `updateModelContext` does not reach the model on its own: the context is held by the room and delivered with the app's next `sendMessage`. A model answering a spoken question learns app state by calling one of the app's tools. Delivering context silently into a running live session differs per provider and is tracked as its own bead.
+
+`tests/app-messages.test.mjs` pins the validation, budget and frame; `tests/mini-app-messages.test.mjs` mounts an app in a real browser and asserts the exact payload handed to the live session.
+
 ### Tool Lifecycle during a Voice Session
 1. **Registration**: The inner app calls `document.modelContext.registerTool(...)`, sending `{ type: "register_tool", regId, tool }` over the private `MessagePort`; the bridge answers `{ type: "register_result", regId, ok, error }`.
 2. **Schema Validation (`core/mini-app.ts`)**: `validateWebMcpTool()` verifies the tool name (`^[a-zA-Z0-9_-]{1,64}$`), description (≤ 1,024 chars), JSON Schema parameters (`type: "object"`), and per-app tool count (`maxTools: 16`).

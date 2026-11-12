@@ -46,6 +46,7 @@
 import { relayPolicy } from "../relay-policy.mjs";
 import { relayBody } from "../relay-body.mjs";
 import { createMiniAppNetwork } from "./mini-app-network.mjs";
+import { createMessageBudget, frameAppMessage, normalizeAppContext, normalizeAppMessage } from "../app-messages.mjs";
 
 export function initMiniAppHost({
   els,
@@ -59,6 +60,10 @@ export function initMiniAppHost({
   renderRead,
   sqehSyncMiniApps,
   launchedMiniApps,
+  // App-to-model messages (public/app-messages.mjs). `sendToModel(text)` returns true only when the text was
+  // handed to a live voice session; `noteAppMessage(title, text)` shows the person what the app said.
+  sendToModel = () => false,
+  noteAppMessage = () => {},
 }) {
   let currentDescriptor = null;
   let currentChannel = null;
@@ -75,6 +80,37 @@ export function initMiniAppHost({
   // the tool that asked for it is still working, so the room's 5.5s tool budget must not expire under it.
   let executingHostActions = 0;
   const network = createMiniAppNetwork({ getHost: () => els.miniAppViewport || els.miniAppContainer });
+  // What the mounted app last said its state is, and how many messages it may still send this minute. Both
+  // belong to ONE mount: a remount or a different app starts with neither.
+  let appContext = "";
+  let appMessageBudget = createMessageBudget();
+
+  /** An app is speaking to the model. Every refusal is told to the app by name; nothing is dropped silently. */
+  function answerAppMessage(data, channel) {
+    const msgId = typeof data.msgId === "string" ? data.msgId : "";
+    if (!msgId || !channel) return;
+    const reply = (ok, error) => {
+      try { channel.port1.postMessage({ type: "app_message_result", msgId, ok, ...(ok ? {} : { error }) }); } catch { /* the app is gone */ }
+    };
+    // Validated again here: the bridge checked it, and this is the side that acts on it.
+    if (data.kind === "context") {
+      const checked = normalizeAppContext(data.text);
+      if (!checked.ok) return reply(false, checked.why);
+      appContext = checked.text;
+      return reply(true);
+    }
+    if (data.kind !== "message") return reply(false, "unknown message kind");
+    const checked = normalizeAppMessage(data.text);
+    if (!checked.ok) return reply(false, checked.why);
+    if (!appMessageBudget.available()) return reply(false, "too many messages this minute; the model was not told");
+    const title = currentDescriptor?.title || "Mini-App";
+    let delivered = false;
+    try { delivered = sendToModel(frameAppMessage({ title, text: checked.text, context: appContext })) === true; } catch { delivered = false; }
+    if (!delivered) return reply(false, "there is no live voice session; the model was not told");
+    appMessageBudget.spend();
+    try { noteAppMessage(title, checked.text); } catch { /* the note is a courtesy */ }
+    reply(true);
+  }
 
   async function syncMiniAppTools(appId, tools) {
     try {
@@ -99,6 +135,8 @@ export function initMiniAppHost({
       if (window.__voiceboxMiniAppRegistry) {
         window.__voiceboxMiniAppRegistry.updateTools("active-room-app", data.tools);
       }
+    } else if (data.type === "app_message") {
+      answerAppMessage(data, channel);
     } else if (data.type === "network_blocked") {
       network.blocked(data.origin);
     } else if (data.type === "host_action_cancel") {
@@ -389,6 +427,8 @@ export function initMiniAppHost({
     if (els.miniAppDock) els.miniAppDock.hidden = true;
     if (els.miniAppBubble) els.miniAppBubble.setAttribute("aria-expanded", "false");
     network.clear();
+    appContext = "";
+    appMessageBudget = createMessageBudget();
     if (els.miniAppViewport) els.miniAppViewport.replaceChildren();
     for (const [callId, entry] of pendingToolCalls.entries()) {
       clearTimeout(entry.timer);
@@ -596,6 +636,8 @@ export function initMiniAppHost({
     window.addEventListener("message", onBridgeHandshake);
 
     network.clear();
+    appContext = "";
+    appMessageBudget = createMessageBudget();
     if (els.miniAppViewport) els.miniAppViewport.replaceChildren(outer);
     // Asked AFTER the frame is in place: the app is already running offline, and the bar sits above it.
     if (access.request.declared && !access.approved && !access.declined) {

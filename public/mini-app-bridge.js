@@ -17,6 +17,7 @@ import { relayTarget } from "./relay-target.mjs";
 import { relayBody } from "./relay-body.mjs";
 import { relayPolicy } from "./relay-policy.mjs";
 import { applyNetworkPolicy, blockedOrigin } from "./app-network-policy.mjs";
+import { normalizeAppContext, normalizeAppMessage } from "./app-messages.mjs";
 
 const inner = document.getElementById("inner-app");
 let currentAppId = null;
@@ -231,6 +232,16 @@ const INJECTED_SDK = `<script>
           return;
         }
 
+        if (data.type === "app_message_result") {
+          const sent = pendingAppMessages.get(data.msgId);
+          if (sent) {
+            pendingAppMessages.delete(data.msgId);
+            if (data.ok) sent.resolve(undefined);
+            else sent.reject(new Error(data.error || "the room did not accept this message"));
+          }
+          return;
+        }
+
         if (data.type === "cancel_tool") {
           const running = activeCalls.get(data.callId);
           if (running) running.abort(domError("the host cancelled this tool call", "AbortError"));
@@ -346,6 +357,24 @@ const INJECTED_SDK = `<script>
       postToBridge({ type: "app_ready" });
     }
   };
+  // THE APP CAN SPEAK FIRST (public/app-messages.mjs). Both return a promise that settles on the room's answer:
+  // a rejection says why (too long, too many this minute, no live voice session).
+  const pendingAppMessages = new Map();
+  let appMessageSeq = 0;
+  function tellRoom(kind, value) {
+    return new Promise(function(resolve, reject) {
+      const msgId = "msg-" + (++appMessageSeq);
+      pendingAppMessages.set(msgId, { resolve: resolve, reject: reject });
+      try {
+        postToBridge({ type: "app_message", msgId: msgId, kind: kind, value: value });
+      } catch (err) {
+        pendingAppMessages.delete(msgId);
+        reject(new TypeError("this value cannot be sent to the host"));
+      }
+    });
+  }
+  window.webMcp.sendMessage = function(text) { return tellRoom("message", text); };
+  window.webMcp.updateModelContext = function(data) { return tellRoom("context", data); };
   window.voicebox = window.webMcp;
   // An OWN property on this document and this navigator, so it shadows a browser-native modelContext: a tool
   // registered with the browser's own implementation would never reach the room. navigator.modelContext is the
@@ -1218,6 +1247,20 @@ function handleInnerMessage(event) {
     return;
   }
 
+  if (data.type === "app_message") {
+    // An app speaking to the model (voicebox-beads-cwx5.12). Shape and size are checked here so nothing
+    // oversized crosses to the room; the budget, the framing and the delivery are the room's.
+    const msgId = typeof data.msgId === "string" ? data.msgId.slice(0, 64) : "";
+    if (!msgId) return;
+    const refuse = (error) => appChannel?.port1.postMessage({ type: "app_message_result", msgId, ok: false, error });
+    const kind = data.kind === "context" ? "context" : data.kind === "message" ? "message" : "";
+    if (!kind) return refuse("unknown message kind");
+    const checked = kind === "message" ? normalizeAppMessage(data.value) : normalizeAppContext(data.value);
+    if (!checked.ok) return refuse(checked.why);
+    postToHost({ type: "app_message", appId: currentAppId, msgId, kind, text: checked.text });
+    return;
+  }
+
   if (data.type === "csp_violation") {
     // Reported once per origin and bounded per load: app code chooses how often this fires.
     const origin = blockedOrigin(data.blockedURI);
@@ -1469,6 +1512,16 @@ window.addEventListener("message", (event) => {
         inner.srcdoc = injectSdkIntoHtml(rawHtml, msg.network);
       } else if (msg.type === "call_tool") {
         dispatchCallTool(msg);
+      } else if (msg.type === "app_message_result") {
+        // The room's answer to an app message: passed back so the app's promise settles on it.
+        if (typeof msg.msgId === "string") {
+          appChannel?.port1.postMessage({
+            type: "app_message_result",
+            msgId: msg.msgId,
+            ok: msg.ok === true,
+            ...(msg.ok === true ? {} : { error: String(msg.error || "refused").slice(0, 300) }),
+          });
+        }
       } else if (msg.type === "host_action_state") {
         // The room has DISPATCHED the request (voicebox-beads-a96w). From here the wait is for an answer, not for
         // a person, so the clock that may say "nothing was sent" is retired and the indeterminate one armed.
