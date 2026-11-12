@@ -72,6 +72,7 @@ import { redactSecrets, redactObject } from "./lib/redact.mjs";
 import { timingSafeStringEqual } from "./lib/timing-safe.mjs";
 import { MiniAppRegistry, validateMiniAppToolArgs } from "./lib/mini-app-host.mjs";
 import { saveMiniApp, getMiniApp, discoverMiniApps } from "./lib/mini-app-store.mjs";
+import { createAcpAgentExecutor, loadAcpAgentSpecs } from "./lib/acp-agents.mjs";
 import { createClaudeAcpExecutor, describeClaudeAdapterInstall, CLAUDE_ACP_TIMEOUT_CEILING_MS } from "./lib/claude-acp.mjs";
 import {
   createAntigravityExecutor,
@@ -1414,6 +1415,18 @@ const adapterExecutors = new Map([
   ["agy", antigravityExecutor],
   ["agentapi", antigravityExecutor],
 ]);
+// CONFIG-DRIVEN ACP AGENTS (voicebox-beads-cwx5.10, lib/acp-agents.mjs): one executor per spec, registered
+// under the spec's id. An agent row reaches one by naming it: `adapter: "antigravity-acp"`. The names the CLI
+// executors above answer to are reserved, so adding a spec never changes what an existing row runs.
+const acpAgents = loadAcpAgentSpecs({ hostDir: HOST_DIR });
+const acpAgentExecutors = new Map();
+for (const spec of acpAgents.specs) {
+  if (adapterExecutors.has(spec.id)) continue;
+  const executor = createAcpAgentExecutor(spec, { root: () => active?.root, onProjectIntegration: broadcastHarnessIntegration });
+  acpAgentExecutors.set(spec.id, executor);
+  adapterExecutors.set(spec.id, executor);
+}
+for (const problem of acpAgents.problems) console.warn(`[acp-agents] skipped: ${problem}`);
 const OPTIONAL_CLI_ADAPTER_EXECUTORS = new Map([
   ["codex-cli", codexExecutor],
   ["codex", codexExecutor],
@@ -1428,6 +1441,10 @@ const UNIMPLEMENTED_ADAPTER_LABELS = new Map([
 ]);
 function describeConfiguredAdapter(agent) {
   const ad = agent?.adapter;
+  if (acpAgentExecutors.has(ad)) {
+    const checked = acpAgentExecutors.get(ad).check({});
+    return checked.ok ? { ok: true, describe: checked.mechanism } : checked;
+  }
   if (ad === "claude-code" || ad === "claude") return describeClaudeAdapterInstall({});
   if (
     ad === "antigravity" ||

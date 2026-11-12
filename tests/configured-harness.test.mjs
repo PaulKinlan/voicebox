@@ -13,6 +13,7 @@ import { readJsonl } from "./lib/jsonl.mjs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { startServer } from "./lib/server.mjs";
 import { freshExecute, taskFixture } from "./lib/task-fixture.mjs";
 
@@ -246,7 +247,7 @@ test("multi-harness coexistence: pi selected, a claude-adapter agent configured 
   assert.ok(claudeRow, "the claude agent should be listed");
   assert.notEqual(claudeRow.admission?.refused, "adapter-not-configured", "claude adapter is implemented; the generic sentence must not appear");
   if (claudeRow.admission?.admitted) {
-    assert.equal(claudeRow.admission.installedVersion, "0.78.0", "admitted claude rows name the exact adapter version that would run (local manifest or npx pin)");
+    assert.match(String(claudeRow.admission.installedVersion), /^\d+\.\d+\.\d+/, "admitted claude rows name the adapter version that would run (local manifest, npx cache or npx default) — any version is admitted (cwx5.10)");
   } else {
     assert.ok(["adapter-unavailable", "adapter-version-unsupported"].includes(claudeRow.admission?.refused), `machine-level named refusal expected, got ${JSON.stringify(claudeRow.admission)}`);
   }
@@ -260,4 +261,44 @@ test("multi-harness coexistence: pi selected, a claude-adapter agent configured 
   const terminal = await pollStatus(base, owner, admitted.body.task.address);
   assert.equal(terminal.state, "completed");
   assert.match(terminal.answer, /6/, `expected '6' in answer, got: ${terminal.answer}`);
+});
+
+test("an ACP agent is added by configuration: a host spec plus an agent row, and delegate_task reaches it (voicebox-beads-cwx5.10)", { timeout: 60000 }, async (t) => {
+  // No model and no account: the agent is tests/fixtures/fake-acp-agent.mjs, a real child process speaking ACP.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vb-acp-config-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const specFile = path.join(dir, "acp-agents.json");
+  const fake = fileURLToPath(new URL("./fixtures/fake-acp-agent.mjs", import.meta.url));
+  fs.writeFileSync(specFile, JSON.stringify([{ id: "fake-acp", label: "Fake agent", command: fake, args: ["acp"] }, { id: "absent-acp", command: "no-such-agent-binary" }]));
+  const f = await taskFixture(t, { runtime: false, env: { VOICEBOX_HARNESS: "pi", VOICEBOX_ACP_AGENTS_FILE: specFile } });
+  const owner = await f.pair("acp-config-owner");
+  const base = f.server.base;
+  const selfEnvironment = (await (await fetch(`${base}/api/agents`)).json()).agents.find((a) => a.id === "pi").environmentKey;
+  const register = (row) => fetch(`${base}/api/agents`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-voicebox-host-token": f.server.hostToken },
+    body: JSON.stringify({ transport: "stdio", environmentKey: selfEnvironment, ...row }),
+  });
+  assert.equal((await register({ id: "agent_fake", name: "Fake", harness: "fake", adapter: "fake-acp" })).status, 201);
+  assert.equal((await register({ id: "agent_absent", name: "Absent", harness: "absent", adapter: "absent-acp" })).status, 201);
+  assert.equal((await register({ id: "agent_agy", name: "Antigravity", harness: "antigravity", adapter: "antigravity-acp" })).status, 201);
+
+  const rows = Object.fromEntries((await (await fetch(`${base}/api/agents`)).json()).agents.map((a) => [a.id, a]));
+  assert.equal(rows.agent_fake.admission.admitted, true, JSON.stringify(rows.agent_fake.admission));
+  assert.equal(rows.agent_absent.admission.refused, "adapter-unavailable", "a spec whose program is missing is refused by name, not as an unknown adapter");
+  assert.match(rows.agent_absent.admission.why, /not installed/);
+  assert.notEqual(rows.agent_agy.admission.refused, "adapter-not-configured", "the built-in Antigravity spec is a known adapter whether or not agy is installed here");
+
+  const admitted = await freshExecute(base, owner, "delegate_task", { agent: "agent_fake", task: "say what you are" }, "fake-acp-call");
+  assert.equal(admitted.status, 200, JSON.stringify(admitted.body));
+  const terminal = await pollStatus(base, owner, admitted.body.task.address, 30000);
+  assert.equal(terminal.state, "completed", JSON.stringify(terminal));
+  // The answer passes through the task host's secret redaction (it mentions key NAMES), so it is matched, not parsed.
+  assert.match(terminal.answer, /"argv":\["acp"\]/);
+  assert.match(terminal.answer, /"prompt":"say what you are"/);
+  assert.match(terminal.answer, /"inside":"selected"/, "a write inside the active root is allowed");
+  assert.match(terminal.answer, /"outside":"cancelled"/, "the workspace boundary holds for a configured agent");
+
+  const refused = await freshExecute(base, owner, "delegate_task", { agent: "agent_absent", task: "x" }, "absent-acp-call");
+  assert.equal(refused.body.refused, "adapter-unavailable", JSON.stringify(refused.body));
 });
