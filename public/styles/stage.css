@@ -316,7 +316,10 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
 
 
 /* ── the voice stage: concentric hairlines, one soft accent ──────────── */
-.voice { display: flex; flex-direction: column; align-items: center; justify-content: center; min-block-size: min(64svh, 520px); }
+/* Top-anchored, not centred: with `center`, anything that changed height (a caption line, the status
+   wrapping, the report under the buttons) re-centred the column and moved the orb. Every slot above the
+   buttons has a fixed size, so the orb sits at the same place in every voice state. */
+.voice { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-block-size: min(64svh, 520px); }
 .mic-stage { position: relative; display: grid; place-items: center; width: 268px; aspect-ratio: 1; }
 /* The circle is the output meter, not decoration: each sample around the ring
    sets that radius. It is invisible until the agent actually speaks. */
@@ -396,7 +399,10 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
    and do nothing at all — a wired cue that is still invisible, which is the defect this change exists to
    fix, one level down. */
 [data-voice="listening"] .output-ring path { animation: breathe 4s ease-in-out infinite; }
-.voice-state { margin: 4px 0 0; font-size: .9375rem; color: color-mix(in srgb, var(--muted) 88%, var(--ink)); text-align: center; max-width: 40ch; }
+.voice-state { margin: 4px 0 0; font-size: .9375rem; line-height: 1.45; color: color-mix(in srgb, var(--muted) 88%, var(--ink)); text-align: center; max-width: 40ch; }
+/* Two lines reserved: "Listening — speak now" and "Agent speaking · your microphone is on (interrupt any
+   time)" take one and two lines, and switching between them must not push the buttons down. */
+.voice-state { display: grid; align-content: center; min-block-size: calc(2lh); }
 .voice-state[data-tone="warn"] { font-size: .875rem; }
 .thinking-trace {
   max-inline-size: min(560px, 90vw);
@@ -446,6 +452,32 @@ body:has(#server-dot[data-ok="false"]) .wordmark-dot {
 .caption { font-size: 1.0625rem; line-height: 1.5; font-weight: 400; margin: 0; text-wrap: pretty; color: var(--ink); transition: opacity 0.8s ease; }
 .caption[data-fading="true"] { opacity: 0; }
 .caption:empty { display: none; }
+/* THE WORDS SLOT. The thinking trace and the caption share one box of fixed height above the orb. Content
+   is bottom-aligned and clipped at the top, so as a reply streams the newest words stay in view and older
+   lines slide up under a fade, instead of the caption growing and pushing the orb down the page. The full
+   reply is still in the transcript and in the live region for screen readers. */
+.voice-top {
+  --voice-top-size: 5.5rem;
+  position: relative;
+  z-index: 1;
+  flex: none;
+  block-size: var(--voice-top-size);
+  inline-size: min(560px, 90vw);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  overflow: hidden;
+  /* The orb's box is square but its loudest ring only reaches ~64% of the way to the edge, so the slot
+     tucks into that empty band instead of adding its full height above the orb. */
+  margin-bottom: calc(var(--voice-top-overlap, 2rem) * -1);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 1.75rem);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 1.75rem);
+}
+.voice-top > * { flex: none; max-inline-size: 100%; }
+.voice-top .thinking-trace { margin-block: 0 4px; }
+.voice-top .caption-space { margin-bottom: 0; }
+.voice-top .thinking-trace-body { max-block-size: 2.8rem; }
 .root-note { max-width: 1100px; width: 100%; margin: 6px auto 0; font-size: .75rem; color: color-mix(in srgb, var(--muted) 85%, var(--ink)); }
 .root-note[data-tone="warn"] { color: var(--warn); }
 .where-sep { color: var(--line); }

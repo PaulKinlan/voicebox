@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
 import { launch } from "./lib/cdp.mjs";
 import { startServer } from "./lib/server.mjs";
+import { OUTPUT_AMPLITUDE, OUTPUT_BASE, OUTPUT_CENTRE } from "../public/audio-meters.mjs";
 
 const EVIDENCE_DIR = path.join(os.tmpdir(), "cap-evidence", "voicebox-sor-20260921");
 mkdirSync(EVIDENCE_DIR, { recursive: true });
@@ -77,7 +78,10 @@ test("live-caption: #caption renders output text properly across all viewports w
       }, sampleText);
 
       // 3. Inspect geometry and layout bounds
-      const metrics = await page.evaluate(() => {
+      // The words slot tucks into the empty band at the top of the square mic stage, so "above the mic" is
+      // measured against the loudest the output ring can draw, not the stage's box.
+      const ringReach = (OUTPUT_BASE + OUTPUT_AMPLITUDE + 2) / OUTPUT_CENTRE;
+      const metrics = await page.evaluate((ringReach) => {
         const caption = document.querySelector("#caption");
         const micWrap = document.querySelector("#voice-ring-wrap");
         const stage = document.querySelector(".stage");
@@ -97,13 +101,14 @@ test("live-caption: #caption renders output text properly across all viewports w
           stageClientWidth: stage.clientWidth,
           bodyScrollWidth: body.scrollWidth,
           bodyClientWidth: body.clientWidth,
-          isAboveMic: capBox.bottom <= micBox.top + 10, // caption positioned above mic
+          ringTop: micBox.top + (micBox.height / 2) * (1 - ringReach),
+          isAboveMic: capBox.bottom <= micBox.top + (micBox.height / 2) * (1 - ringReach), // caption clears the ring
         };
-      });
+      }, ringReach);
 
       assert.equal(metrics.text, sampleText, `caption text must match at ${vp.name}`);
       assert.ok(metrics.capHeight > 0, `caption must have positive height when text is present at ${vp.name}`);
-      assert.ok(metrics.isAboveMic, `#caption (bottom: ${metrics.capBottom}) must sit above mic stage (top: ${metrics.micTop}) at ${vp.name}`);
+      assert.ok(metrics.isAboveMic, `#caption (bottom: ${metrics.capBottom}) must sit above the mic's output ring (top: ${metrics.ringTop}) at ${vp.name}`);
       assert.ok(
         metrics.bodyScrollWidth <= metrics.bodyClientWidth,
         `No horizontal overflow on body at ${vp.name} (scroll: ${metrics.bodyScrollWidth}, client: ${metrics.bodyClientWidth})`,

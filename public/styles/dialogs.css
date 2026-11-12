@@ -135,8 +135,11 @@ html:has(dialog.settings[open]) { overflow: hidden; }
 .about { margin-top: 12px; }
 .about summary { font-size: .8125rem; color: var(--muted); }
 .about p { margin: 8px 0 0; font-size: .75rem; color: var(--muted); }
-.interrupt { display: none; }
-.voice:has(#voice-ring-wrap[data-voice="speaking"]) .interrupt { display: inline-flex; }
+/* Stop reply keeps its place in the row and is only hidden, so Camera and Share screen do not slide
+   sideways when it appears and disappears with the agent's speech. visibility also drops it from the
+   tab order and the accessibility tree while it does nothing. */
+.interrupt { visibility: hidden; }
+.voice:has(#voice-ring-wrap[data-voice="speaking"]) .interrupt { visibility: visible; }
 .voice-actions {
   display: flex;
   flex-wrap: wrap;
@@ -348,7 +351,7 @@ body[data-voice="speaking"] .mic-dock {
 .send { color: light-dark(#fff, #141c34); border: 0; border-radius: 999px; padding: 0 18px; min-height: 36px; font-weight: 500; background: var(--accent); }
 .send:hover { filter: brightness(1.06); }
 .send:disabled { background: color-mix(in srgb, var(--ink) 9%, transparent); color: color-mix(in srgb, var(--muted) 50%, transparent); opacity: 1; }
-.turn-report { min-height: 20px; max-width: 60ch; margin: 14px 0 0; font-size: .8125rem; color: var(--muted); text-align: center; overflow-wrap: anywhere; transition: opacity 0.8s ease; }
+.turn-report { min-height: 20px; line-height: 1.45; min-block-size: calc(2lh); /* two lines reserved so the card below does not jump when a report lands */ max-width: 60ch; margin: 14px 0 0; font-size: .8125rem; color: var(--muted); text-align: center; overflow-wrap: anywhere; transition: opacity 0.8s ease; }
 
 /* ── Extension reconfigure & removal dialog (voicebox-beads-ud5) ─────────── */
 .setting-input {
