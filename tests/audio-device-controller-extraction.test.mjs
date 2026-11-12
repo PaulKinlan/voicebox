@@ -91,9 +91,16 @@ const CITED_SPANS = [
     // The same change: a refresh stops capture only when the saved microphone was LISTED and has now left.
     // A saved microphone already missing at press time was never asked for, so capture is on the default.
     bead: "mic-missing-fallback",
-    name: "refreshDevices stops capture only for a microphone that was listed and has left",
+    name: "refreshDevices stops capture only when the device capture is using has left",
     startRe: /^ {2}(const before = |\/\/ "Before" for the microphone)/,
     endBeforeRe: /^ {2}const listed = /,
+  },
+  {
+    // The same change: switching microphones mid-capture records which device capture now uses.
+    bead: "mic-missing-fallback",
+    name: "a mid-capture switch records the device capture uses",
+    startRe: /^ {6}(captureMicId = |await getLiveClient\(\)\.startCapture)/,
+    endBeforeRe: /^ {4}\} catch/,
   },
   {
     // voicebox-beads-cqrd, the other cited change since the extraction: the refusal branch of the
@@ -619,4 +626,38 @@ test("an unplugged saved microphone is not asked for: capture uses the default a
   assert.deepEqual(result.none, { deviceId: null, missing: null }, "no saved mic means the default");
   assert.deepEqual(result.hidden, { deviceId: "mic-that-left", missing: null }, "with ids hidden the saved id is still tried");
   assert.equal(result.keptId, "mic-that-left", "the preference is kept, so plugging it back in makes it the mic again");
+});
+
+test("capture on the default is not stopped or mislabelled when the saved microphone comes and goes", async () => {
+  // Review finding on #47: reconnecting the saved mic then unplugging it again must not stop capture that
+  // is running on the default, and the row must keep naming the default while it listens.
+  const result = await page.evaluate(async () => {
+    const real = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+    let plugged = [{ kind: "audioinput", deviceId: "laptop", label: "Laptop microphone" }];
+    navigator.mediaDevices.enumerateDevices = async () => plugged;
+    const { createAudioDeviceController } = await import("/components/audio-device-controller.mjs");
+    const store = new Map([["voicebox.devices", JSON.stringify({ mic: { id: "usb", name: "USB mic" }, out: { id: "", name: "" } })]]);
+    const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+    let stops = 0;
+    const client = { state: { capture: true }, stopCapture: async () => { stops++; } };
+    const row = document.createElement("div");
+    const stage = document.createElement("div");
+    stage.dataset.voice = "listening";
+    const c = createAudioDeviceController({ els: { micDeviceState: row, stage }, on: () => {}, getLiveClient: () => client, storage });
+    c.loadPrefs();
+    const chosen = await c.micForCapture();
+    await c.refresh();
+    const onDefault = row.textContent;
+    plugged = [...plugged, { kind: "audioinput", deviceId: "usb", label: "USB mic" }];
+    await c.refresh();
+    const replugged = row.textContent;
+    plugged = plugged.filter((d) => d.id !== "usb" && d.deviceId !== "usb");
+    await c.refresh();
+    navigator.mediaDevices.enumerateDevices = real;
+    return { chosen, onDefault, replugged, stops };
+  });
+  assert.equal(result.chosen.deviceId, null);
+  assert.equal(result.onDefault, "Listening through System default · USB mic is not connected");
+  assert.equal(result.replugged, "Listening through System default · USB mic was not connected when the mic started");
+  assert.equal(result.stops, 0, "capture on the default must not be stopped when the saved mic leaves again");
 });

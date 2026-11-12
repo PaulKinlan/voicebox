@@ -20,6 +20,11 @@
 // this controller. A snapshot captured here would keep naming the boot-time client while every
 // assertion about the surface stayed green.
 export function createAudioDeviceController({ els, on, getLiveClient, storage = localStorage }) {
+// THE MICROPHONE CAPTURE WAS ASKED TO USE, kept apart from the saved preference and the device list:
+// "" is the system default, an id is that device, null is "no capture started through this controller".
+// A saved microphone that is plugged back in mid-session does not move capture onto it, so the row and
+// the unplug check must read this, not the preference.
+let captureMicId = null;
 // ── devices: what was chosen, what is available, what is happening ────────
 //
 // Three separate facts per row, because conflating them is how a page ends up
@@ -122,8 +127,8 @@ function renderDevices() {
   if (!prefs.mic.id && !inputIdsUsable) mic = listening ? "Listening through System default" : "Mic off · this browser lists no named microphones until you allow access";
   else if (!prefs.mic.id) mic = listening ? "Listening through System default" : "Mic off";
   else if (micNamesHidden && !micPresent) mic = `${micName} · not checked yet — device names can be hidden until microphone access is allowed`;
-  else if (listening) mic = !micPresent && namesVisible && prefs.mic.id
-    ? `Listening through System default · ${micName} is not connected`
+  else if (listening) mic = prefs.mic.id && captureMicId === ""
+    ? `Listening through System default · ${micName} ${micPresent ? "was not connected when the mic started" : "is not connected"}`
     : `Listening through ${micName}`;
   else if (micPresent) mic = `${micName} · mic off`;
   else mic = `${micName} is not connected. Mic off.`;
@@ -152,10 +157,10 @@ function renderDevices() {
 }
 
 async function refreshDevices() {
-  // "Before" for the microphone means LISTED before: only a saved microphone that was here and has now
-  // left can be the one capture is using. One that was already missing at press time was never asked
-  // for (micForCapture), so capture is on the system default and stopping it would end a working session.
-  const before = { mic: devices.inputs.some((d) => d.id === devices.prefs.mic.id) ? devices.prefs.mic.id : "", out: devices.prefs.out.id };
+  // "Before" for the microphone is the device CAPTURE IS USING, when known: a saved microphone that was
+  // missing at press time was never asked for (micForCapture), so capture is on the system default ("")
+  // and that device coming and going again must not stop a working session.
+  const before = { mic: captureMicId !== null ? captureMicId : devices.prefs.mic.id, out: devices.prefs.out.id };
   const listed = await listDevices();
   devices.inputs = listed.inputs;
   devices.outputs = listed.outputs;
@@ -188,6 +193,7 @@ on(els.micSelect, "change", async () => {
   if (getLiveClient()?.state?.capture) {
     try {
       await getLiveClient().stopCapture?.();
+      captureMicId = devices.prefs.mic.id;
       await getLiveClient().startCapture?.({ deviceId: devices.prefs.mic.id || null });
     } catch { /* startCapture surfaces any error via onError */ }
   }
@@ -228,14 +234,15 @@ on(els.outSelect, "change", async () => {
   // A list whose ids are hidden (no microphone access yet) cannot show absence, so the saved id is tried.
   async function micForCapture() {
     const saved = devices.prefs.mic;
-    if (!saved.id) return { deviceId: null, missing: null };
+    const use = (deviceId, missing) => { captureMicId = deviceId ?? ""; return { deviceId, missing }; };
+    if (!saved.id) return use(null, null);
     let listed;
-    try { listed = await listDevices(); } catch { return { deviceId: saved.id, missing: null }; }
+    try { listed = await listDevices(); } catch { return use(saved.id, null); }
     devices.inputs = listed.inputs;
     devices.namesVisible = listed.names === true;
     const idsUsable = listed.inputs.some((d) => d.id);
-    if (!idsUsable || listed.inputs.some((d) => d.id === saved.id)) return { deviceId: saved.id, missing: null };
-    return { deviceId: null, missing: saved.name || "The chosen microphone" };
+    if (!idsUsable || listed.inputs.some((d) => d.id === saved.id)) return use(saved.id, null);
+    return use(null, saved.name || "The chosen microphone");
   }
 
   // The page global the host publishes (window.__voiceboxDevices) is built from these accessors rather
