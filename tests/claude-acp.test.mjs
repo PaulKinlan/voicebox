@@ -89,7 +89,7 @@ test("claude executor admits harness claude/claude-code and refuses others by na
   const bad = executor.check({ input: { agent: "codex" } });
   assert.equal(bad.refused, "adapter-not-configured");
   const pinned = executor.check({ agentConfig: { adapter: "claude-code", pinnedVersion: "9.9.9" } });
-  assert.equal(pinned.refused, "adapter-version-unsupported");
+  assert.equal(pinned.ok, true, "a version nobody tested refuses nothing: the ACP handshake checks the protocol (voicebox-beads-cwx5.10)");
   const transport = executor.check({ agentConfig: { adapter: "claude-code", transport: "http" } });
   assert.equal(transport.refused, "unsupported-runtime-capability");
   fs.rmSync(dir, { recursive: true, force: true });

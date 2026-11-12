@@ -36,7 +36,7 @@ test("pi-acp real executor admits configured Pi and refuses unconfigured harness
   }
 });
 
-test(`real ${ACP_AGENT.name} ${ACP_AGENT.version} / pi ${ACP_AGENT.piVersion}: isolated handshake, auth refusal, actual death and version mismatch`, { skip, timeout: 40000 }, async (t) => {
+test(`real ${ACP_AGENT.name} ${ACP_AGENT.version} / pi ${ACP_AGENT.piVersion}: isolated handshake, auth refusal, actual death and a directory that is not the adapter`, { skip, timeout: 40000 }, async (t) => {
   const probe = await openPiAcpProbe(config);
   t.after(() => probe.close());
   assert.equal(probe.info.protocolVersion, 1);
@@ -50,13 +50,9 @@ test(`real ${ACP_AGENT.name} ${ACP_AGENT.version} / pi ${ACP_AGENT.piVersion}: i
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-acp-version-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "pi-acp", version: "999" }));
-  await assert.rejects(openPiAcpProbe({ ...config, adapterDir: dir }), { refused: "adapter-version-unsupported" });
-  // pi --version reads its adjacent manifest; check the actual binary in an altered install.
-  fs.copyFileSync(fs.realpathSync(config.piBinary), path.join(dir, "pi"), fs.constants.COPYFILE_FICLONE);
-  fs.chmodSync(path.join(dir, "pi"), 0o700);
-  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "999" }));
-  await assert.rejects(openPiAcpProbe({ ...config, piBinary: path.join(dir, "pi") }), { refused: "harness-version-unsupported" });
+  // A directory that is not the adapter is refused by name; the adapter's VERSION refuses nothing (cwx5.10).
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "not-pi-acp", version: "0.0.34" }));
+  await assert.rejects(openPiAcpProbe({ ...config, adapterDir: dir }), { refused: "adapter-unavailable" });
 });
 
 test("D1 real TCP diagnostic only: killed ACP process is interrupted and second connection reads without replay", { skip, timeout: 40000 }, async (t) => {

@@ -45,7 +45,7 @@ When no harness is active, calling `delegate_task` returns `executor-unavailable
   - A frame written to an adapter that has **already exited** fails — synchronously with `EPIPE`, or asynchronously as an `'error'` on the child's stdin. That write failure is not the task's outcome: the frame is dropped because there is nobody to receive it, and the exit descriptor (exit code, stage and stderr tail) is the diagnostic the caller sees. `isPeerGoneWrite` (`lib/acp-client.mjs`) names the peer-gone codes; any other write failure still surfaces as itself (`tests/acp-client.test.mjs`, `voicebox-beads-cps6`).
 
 ### Pi ACP Adapter (`lib/pi-acp.mjs`)
-- Targets `pi-acp` (`0.0.34`) with `pi` (`0.87.1`). Override binary paths via `VOICEBOX_ACP_ADAPTER` and `VOICEBOX_ACP_PI`.
+- Last exercised with `pi-acp` `0.0.34` and `pi` `0.87.1`; other versions run (see Version policy below). Override binary paths via `VOICEBOX_ACP_ADAPTER` and `VOICEBOX_ACP_PI`.
 - Also provides `openPiAcpProbe()` for credential-free handshake verification inside bubblewrap isolation. Binds the active Node runtime (`process.execPath`) to `/packages/node` so the probe runs independent of host `/usr/bin/node` symlinks or user-profile locations (for Node runtimes depending on system libraries under `/usr/lib` and `/lib64`), and reports exit status on abnormal termination without exposing raw child stderr (`voicebox-beads-7i5j`).
 - **Anthropic Key Fallback**: Passes `ANTHROPIC_API_KEY` through to the `pi-acp` child environment so Anthropic-backed model selections succeed when Pi's internal auth store has no separate credential (`tests/pi-acp-options.test.mjs`).
 
@@ -62,7 +62,8 @@ When `delegate_task` targets a configured agent entry (`core/harness-config.ts`,
 2. **Thinking / Reasoning Effort**: When `model.thinking` is specified, forwarded via `session/set_config_option` (`configId: "thought_level"`). Unsupported levels fail with `thinking-level-unsupported`.
 3. **System Persona (`agentConfig.prompt`)**: Prepended to the task prompt as system framing.
 4. **Tool Reach Enforcement (`agentConfig.reach.tools`)**: Any tool request outside the agent's declared reach list is refused with `tool-not-in-agent-reach` before consulting host policy.
-5. **Pre-Flight Validation**: Mismatched adapter versions, unsupported transports, or unconfigured harnesses fail closed with `adapter-not-configured`, `adapter-version-unsupported`, `unsupported-runtime-capability`, or `unsupported-model-options`.
+5. **Pre-Flight Validation**: Unsupported transports or unconfigured harnesses fail closed with `adapter-not-configured`, `unsupported-runtime-capability`, or `unsupported-model-options`.
+6. **Version policy**: The ACP handshake checks the protocol version only (`acp-protocol-unsupported` when the agent does not answer with version 1). The agent's name and version are reported, never judged, so an upgraded adapter keeps working and a `pinnedVersion` on an agent row refuses nothing. The versions named in `lib/acp-client.mjs` and `lib/claude-acp.mjs` are what was last exercised and what `npx` installs by default.
 
 ---
 

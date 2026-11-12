@@ -128,13 +128,13 @@ test("pi executor check: refuses unsupported adapter, version, transport, and mo
   assert.equal(wrongAdapter.refused, "adapter-not-configured");
   assert.match(wrongAdapter.why, /only supports adapter 'pi-acp'/);
 
-  // 2. Pinned version must match installed pi-acp version
+  // 2. A pinned version refuses nothing: the ACP handshake checks the protocol, not the adapter's version
+  //    (voicebox-beads-cwx5.10). An agent row saved with the old default pin must keep working after an upgrade.
   const wrongVersion = executor.check({
     agentConfig: { harness: "pi", adapter: "pi-acp", pinnedVersion: "999.0.0" },
   });
-  assert.equal(wrongVersion.ok, false);
-  assert.equal(wrongVersion.refused, "adapter-version-unsupported");
-  assert.match(wrongVersion.why, /pinned adapter version/);
+  assert.notEqual(wrongVersion.refused, "adapter-version-unsupported");
+  assert.doesNotMatch(String(wrongVersion.why ?? ""), /pinned adapter version/);
 
   // 3. Transport must be stdio
   const wrongTransport = executor.check({

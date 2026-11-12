@@ -37,11 +37,21 @@ test("ACP protocol fixture: handshake, session, text, permission denial and canc
   finish(); assert.equal(await answer, "bounded answer"); f.client.close();
 });
 
-test("ACP fixture refuses wrong version, missing timeout, malformed response, timeout and typed death", async () => {
-  for (const changed of [{ protocolVersion: 2 }, { agentInfo: { name: "pi-acp", version: "999" } }]) {
+test("ACP fixture refuses a wrong protocol version, missing timeout, malformed response, timeout and typed death", async () => {
+  // The protocol version is the compatibility contract (voicebox-beads-cwx5.10): a different one, or none, refuses.
+  for (const changed of [{ protocolVersion: 2 }, { protocolVersion: undefined }, { protocolVersion: "1" }]) {
     const f = fixture((m, send) => send(result(m, { ...info, ...changed })));
-    await assert.rejects(f.client.initialize(), { refused: "adapter-version-unsupported" });
+    await assert.rejects(f.client.initialize(), { refused: "acp-protocol-unsupported" });
     assert.equal(f.closed(), 1);
+  }
+  // WHICH agent answered, and which version of it, refuses nothing: an upgraded adapter, an agent nobody has
+  // tested and one that names nothing at all are all admitted, and the caller is told who answered.
+  for (const agentInfo of [{ name: "pi-acp", version: "999" }, { name: "some-new-agent", version: "0.1.0" }, undefined]) {
+    const f = fixture((m, send) => send(result(m, { protocolVersion: 1, agentInfo })));
+    const answered = await f.client.initialize();
+    assert.deepEqual(answered.agentInfo, agentInfo);
+    assert.equal(f.closed(), 0);
+    f.client.close();
   }
   assert.throws(() => fixture(null, { timeoutMs: Infinity }), { refused: "unbounded-executor" });
   const malformed = fixture((m, send) => send({ jsonrpc: "2.0", id: m.id }));
