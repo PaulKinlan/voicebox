@@ -30,6 +30,7 @@ import { createToolCatalogRoutes } from "./lib/routes/tool-catalog.mjs";
 import { createGeminiMediaRoutes } from "./lib/routes/gemini-media.mjs";
 import { createExtensionRoutes } from "./lib/routes/extensions.mjs";
 import { createMiniAppRoutes } from "./lib/routes/mini-apps.mjs";
+import { createGuardedDispatcher } from "./lib/routes/guarded.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
 import { CORE_FS_DESCRIPTOR, createUnifiedDiff, dispatchFor } from "./core/dispatch.ts";
@@ -4283,9 +4284,21 @@ const miniAppRoutes = createMiniAppRoutes({
     try { runningSession?.socket?.send(frame); } catch {}
   },
   json,
-  readJsonBody,
-  BodyRefusal,
   contentJsonBodyMaxBytes: CONTENT_JSON_BODY_MAX_BYTES,
+});
+// THE GUARDED TABLE (voicebox-beads-cwx5.1, lib/routes/guarded.mjs): routes that DECLARE their boundary as
+// data. The dispatcher enforces each guard before its handler runs, so the checks below are named once, here,
+// and an area joins by adding its defined routes to this list — not by adding lines to handle().
+const guardedRoutes = createGuardedDispatcher({
+  routes: [...miniAppRoutes],
+  checks: {
+    browserMutationRefused,
+    hostTokenOk: (req) => extensions.hostTokenOk(req.headers["x-voicebox-host-token"]),
+    hasAuthority: hasExtensionAuthority,
+    hasRoomAuthority: hasExplicitRoomAuthority,
+  },
+  json,
+  readJsonBody,
 });
 const extensionRoutes = createExtensionRoutes({
   json,
@@ -4346,7 +4359,7 @@ async function handle(req, res) {
   // Neither header authenticates a local PROCESS: raw TCP can forge both. The opt-in loopback wall
   // above is that separate boundary; unheaded machine requests and valid host tokens still work.
   const browserSensitive =
-    key === "POST /api/undo" || key === "POST /api/mini-app/tools" ||
+    key === "POST /api/undo" ||
     key === "POST /api/probe" || key === "GET /api/probe";
   if (browserSensitive && browserMutationRefused(req)) {
     return json(res, 403, {
@@ -4554,7 +4567,7 @@ async function handle(req, res) {
     return json(res, 200, result);
   }
 
-  if (await miniAppRoutes(req, res, url)) return;
+  if (await guardedRoutes(req, res, url)) return;
 
   if (await workspaceRoutes(req, res, url, "write")) return;
 

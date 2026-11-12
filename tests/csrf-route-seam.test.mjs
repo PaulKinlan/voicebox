@@ -642,13 +642,6 @@ const MODULE_DECISIONS = new Map([
   ["POST /api/gemini/embed", "json"],
   ["POST /api/harnesses/configure", "json"],
   ["POST /api/presence", "json"],
-  // The Mini-App routes moved to lib/routes/mini-apps.mjs (voicebox-beads-cwx5.1). Three keep the JSON door in the
-  // module; POST /api/mini-app/tools reads its own bounded body, so its boundary is still the HOST's browser guard,
-  // which is where the csrf decision is checked.
-  ["POST /api/mini-apps", "json"],
-  ["PUT /api/mini-apps", "json"],
-  ["DELETE /api/mini-apps", "json"],
-  ["POST /api/mini-app/tools", "csrf"],
   ["DELETE /api/file", "json"],
   ["PUT /api/file", "json"],
   ["PATCH /api/file", "json"],
@@ -673,17 +666,16 @@ const MODULE_MECHANISMS = {
   authority: /has(?:ExplicitRoom|Extension)Authority\(/,
   "host-token": /hostTokenOk\(/,
   wall: null,
-  // Checked against the host's browser guard rather than the module's text: see hostCsrfGuard below.
-  csrf: null,
 };
 
-/** The host's browser-sensitive key list, the one place a csrf decision is enforced for any route, extracted or not. */
-function hostCsrfGuard(host = source) {
-  const guardStart = host.indexOf("  const browserSensitive =");
-  const guardEnd = host.indexOf("  if (browserSensitive && browserMutationRefused(req))", guardStart);
-  assert.ok(guardStart !== -1 && guardEnd > guardStart, "browser-sensitive decision must still exist");
-  return host.slice(guardStart, guardEnd);
-}
+/**
+ * A module that builds its routes with defineRoutes() (lib/routes/guarded.mjs) DECLARES each guard as data and the
+ * guarded dispatcher enforces it before the handler runs — a mutating route with no guard cannot even be imported.
+ * Those modules are not text-scanned here: tests/guarded-routes.test.mjs checks the table and the dispatcher, and
+ * the test at the end of this file checks that every such module is actually wired into the host's dispatcher.
+ */
+const DECLARES_GUARDS = /import\s*\{[^}]*\bdefineRoutes\b[^}]*\}\s*from\s*["']\.\/guarded\.mjs["']/;
+const GUARDED_INFRASTRUCTURE = "guarded.mjs";
 
 /**
  * Every MUTATING route the extracted modules DECLARE AS A KEY, read as text with comments stripped:
@@ -705,6 +697,7 @@ function moduleSites(overrides = {}) {
   for (const name of readdirSync(dir).filter((entry) => entry.endsWith(".mjs")).sort()) {
     const file = `lib/routes/${name}`;
     const text = stripComments(overrides[file] ?? readFileSync(path.join(dir, name), "utf8"));
+    if (name === GUARDED_INFRASTRUCTURE || DECLARES_GUARDS.test(text)) continue;
     const seen = new Set();
     for (const match of text.matchAll(new RegExp(`${Q}([A-Z]+ \\/api\\/[^"'\`]+)${Q}`, "g"))) {
       const key = match[1];
@@ -722,10 +715,6 @@ function assertModuleBoundary(overrides = {}) {
     const decision = MODULE_DECISIONS.get(key);
     assert.ok(decision, `${key} (${file}): a new mutating route declared in an extracted module needs a decision here — json, csrf, host-token, authority or wall`);
     const mechanism = MODULE_MECHANISMS[decision];
-    if (decision === "csrf") {
-      assert.ok(hostCsrfGuard(overrides["server.mjs"]).includes(`key === "${key}"`), `${key} (${file}): missing browser CSRF guard in the host`);
-      continue;
-    }
     assert.ok(decision === "wall" || mechanism, `${key}: unknown decision kind ${decision}`);
     if (!mechanism) continue;
     const text = stripComments(overrides[file] ?? readFileSync(path.join(root, file), "utf8"));
@@ -772,11 +761,25 @@ test("the module scan refuses a new key, a deleted boundary, and a decision nobo
   assert.throws(() => assertModuleBoundary({ [file]: removed }), /POST \/api\/extensions\/reconfigure: obsolete authority decision/, "a decision with no route must fail the inventory");
 });
 
-test("an extracted csrf route is still checked against the host's browser guard (voicebox-beads-cwx5.1)", () => {
-  const unguarded = source.replace('key === "POST /api/mini-app/tools" ||', "");
-  assert.notEqual(unguarded, source, "the host guard must still name POST /api/mini-app/tools where this test removes it");
-  assert.throws(
-    () => assertModuleBoundary({ "server.mjs": unguarded }),
-    /POST \/api\/mini-app\/tools \(lib\/routes\/mini-apps\.mjs\): missing browser CSRF guard in the host/,
-  );
+test("every module that declares its guards as data is wired into the host's guarded dispatcher (voicebox-beads-cwx5.1)", () => {
+  const dir = path.join(root, "lib", "routes");
+  const declaring = readdirSync(dir)
+    .filter((name) => name.endsWith(".mjs") && name !== GUARDED_INFRASTRUCTURE)
+    .filter((name) => DECLARES_GUARDS.test(stripComments(readFileSync(path.join(dir, name), "utf8"))));
+  assert.ok(declaring.includes("mini-apps.mjs"), "the scan must still see the Mini-App module, or it is passing by finding nothing");
+  const host = stripComments(source);
+  const dispatcher = host.match(/createGuardedDispatcher\(\{\s*routes:\s*\[([^\]]*)\]/);
+  assert.ok(dispatcher, "server.mjs must build the guarded dispatcher from a literal list of route groups");
+  assert.match(host, /if \(await guardedRoutes\(req, res, url\)\) return;/, "and handle() must dispatch through it");
+  for (const name of declaring) {
+    // `import { createFooRoutes } from "./lib/routes/foo.mjs"` → `const fooRoutes = createFooRoutes(` → `...fooRoutes`
+    const imported = host.match(new RegExp(`import\\s*\\{\\s*(\\w+)\\s*\\}\\s*from\\s*["']\\./lib/routes/${name.replace(".", "\\.")}["']`));
+    assert.ok(imported, `lib/routes/${name}: declares guards but server.mjs does not import its factory`);
+    const built = host.match(new RegExp(`const\\s+(\\w+)\\s*=\\s*${imported[1]}\\(`));
+    assert.ok(built, `lib/routes/${name}: ${imported[1]} is imported but never called`);
+    assert.ok(
+      dispatcher[1].includes(`...${built[1]}`),
+      `lib/routes/${name}: its routes (${built[1]}) are not in the guarded dispatcher, so their declared guards are never enforced`,
+    );
+  }
 });
