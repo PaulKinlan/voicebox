@@ -99,6 +99,7 @@ export function createAudioClient({
     ready: false, // the server said setupComplete
     sessionEnded: false, // the upstream (model) session is gone
     startFailure: null, // { code, provider, message } when the host said the session could not START
+    endReason: "", // why the session ended; the label adds the live microphone clause to it
     model: "",
     gatedFrames: 0, // how many frames the server held before the gate opened
     capture: false,
@@ -138,6 +139,9 @@ export function createAudioClient({
   let captureNode = null;
   let captureSource = null;
   let stream = null;
+  // Bumped by every stopCapture(). A startCapture() that was mid-await when capture was stopped compares its own
+  // number after each await and backs out, releasing what it opened, instead of resuming on freed resources.
+  let captureRun = 0;
   let playCtx = null;
   let playGain = null;
   let playbackVolume = 0.8;
@@ -263,11 +267,10 @@ export function createAudioClient({
         ? `The model reported an error (${state.providerError.reason}) · your microphone is still on and its audio is still being sent`
         : `The model reported an error (${state.providerError.reason}) · your microphone is off, so nothing is being sent`;
     }
+    // A session that has ENDED is not waiting for anything, whatever phase capture reports afterwards
+    // (voicebox-beads-cwx5.6). A microphone refusal is its own, more specific, sentence and keeps priority.
+    if (state.sessionEnded && !state.captureError) return endedLabel();
     if (state.phase === "error") return state.lastError || "Audio error";
-    // A session that has ENDED is not waiting for anything. Capture can finish starting after the host has
-    // already refused the session, and the phase it reports must not turn the refusal back into
-    // "Waiting for the model" (voicebox-beads-cwx5.6).
-    if (state.sessionEnded) return state.lastError || "Live session ended. Press the mic to start a new session.";
     if (state.phase === "starting") return state.capture ? "Connecting…" : "Press to speak";
     if (state.phase === "agent-speaking") {
       return state.capture
@@ -278,6 +281,19 @@ export function createAudioClient({
     if (!state.capture) return "Mic off · press to speak";
     if (!state.ready) return `Waiting for the model · ${state.gatedFrames} frame(s) held until setup completes`;
     return "Listening — speak now";
+  }
+
+  /**
+   * The sentence for a session that has ended. The REASON is fixed when it ends; the microphone clause is read
+   * from the capture state every time, so it cannot go on saying "still on" after capture has stopped.
+   * A session that never started already has its reason from the host; the socket closing afterwards is the
+   * consequence, not the news (voicebox-beads-cwx5.6).
+   */
+  function endedLabel() {
+    if (state.startFailure) return state.startFailure.message;
+    return `Live session ended (${state.endReason || "session-ended"}). ` +
+      (state.capture ? "Your microphone is still on, but nothing is listening. " : "") +
+      "Press the mic to start a new session.";
   }
 
   function emit(phase, detail = {}) {
@@ -392,6 +408,10 @@ export function createAudioClient({
         // Ended NOW, not when the close arrives: the frame is the verdict, and a label read between the two
         // must already say so.
         endSession("start-failed", { reason: text });
+        // EVERY fatal start failure releases the microphone, whatever its code: nothing will listen on this
+        // session. stopCapture() also cancels a capture that is still opening. Its own "idle" emit is followed
+        // by the error phase so the stage keeps the reason.
+        void stopCapture().then(() => emit("error", { sessionEnded: true, startFailure: state.startFailure }));
         onError(new Error(text), { fatal: true, code: state.startFailure.code, provider: state.startFailure.provider });
         return;
       }
@@ -538,14 +558,8 @@ export function createAudioClient({
     state.sessionEnded = true;
     state.ready = false;
     state.providerError = null;
-    const reason = String(detail?.reason ?? detail?.message ?? kind);
-    // A session that never started already has its reason from the host; the socket closing afterwards is
-    // the consequence, not the news (voicebox-beads-cwx5.6).
-    state.lastError = state.startFailure
-      ? state.startFailure.message
-      : `Live session ended (${reason}). ` +
-        (state.capture ? "Your microphone is still on, but nothing is listening. " : "") +
-        "Press the mic to start a new session.";
+    state.endReason = String(detail?.reason ?? detail?.message ?? kind);
+    state.lastError = endedLabel();
     // A dead session must not keep playing queued audio.
     for (const source of sources) {
       try { source.onended = null; source.stop(); } catch { /* already stopped */ }
@@ -577,6 +591,7 @@ export function createAudioClient({
     // A new socket is a new session: clear the ended state from the last one.
     state.sessionEnded = false;
     state.startFailure = null;
+    state.endReason = "";
     state.providerError = null;
     state.lastError = "";
     // THE RATE BELONGS TO THE CONNECTION, and this line is the defect astra found by driving the real page
@@ -612,6 +627,13 @@ export function createAudioClient({
     if (state.capture) return;
     state.captureError = ""; // a new user action clears the sticky refusal
     state.captureErrorReason = "";
+    if (state.startFailure) {
+      // The host has already said this session cannot start: do not open a microphone for nobody.
+      emit("error", { sessionEnded: true, startFailure: state.startFailure });
+      return;
+    }
+    const run = ++captureRun;
+    const cancelled = () => run !== captureRun;
     emit("starting");
     try {
       if (!mediaDevices?.getUserMedia || !AudioContextCtor || !AudioWorkletNodeCtor) {
@@ -677,7 +699,14 @@ export function createAudioClient({
         emit("idle", { rateNotDeclared: true, socketClosed: closed });
         return;
       }
-      stream = await mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
+      const opened = await mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
+      if (cancelled()) {
+        // Capture was stopped while the device was opening (a fatal start failure does this). Release the
+        // device this call opened and leave the state to whoever stopped it.
+        for (const track of opened?.getTracks?.() ?? []) track.stop();
+        return;
+      }
+      stream = opened;
       // The browser's own pipeline converts the device's audio to this rate — no resampler of ours.
       captureCtx = new AudioContextCtor({ sampleRate: state.inputRate });
       // THE DECLARATION IS A REQUEST; THE CONTEXT'S OWN RATE IS THE FACT. astra measured a reattached client
@@ -693,7 +722,13 @@ export function createAudioClient({
       if (state.rateContradiction) {
         onDiagnostic({ kind: "rate-contradiction", ...state.rateContradiction });
       }
-      await captureCtx.audioWorklet.addModule(workletUrl);
+      const startingCtx = captureCtx;
+      await startingCtx.audioWorklet.addModule(workletUrl);
+      if (cancelled()) {
+        // stopCapture() ran during the await and has already released the stream and closed this context;
+        // resuming would build a graph on freed resources and report it as a broken microphone.
+        return;
+      }
       captureNode = new AudioWorkletNodeCtor(captureCtx, "pcm-capture");
       captureSource = captureCtx.createMediaStreamSource(stream);
       captureSource.connect(captureNode);
@@ -715,12 +750,6 @@ export function createAudioClient({
       state.capture = true;
       // The session may have been refused while the microphone was still opening. Do not report "listening"
       // to nobody: stay in the error the host named (voicebox-beads-cwx5.6).
-      if (state.startFailure) {
-        // Nothing will ever listen on this session, so the microphone is released rather than left open.
-        await stopCapture();
-        emit("error", { sessionEnded: true, startFailure: state.startFailure });
-        return;
-      }
       emit(state.sessionEnded ? "error" : state.playbackActive ? "agent-speaking" : "listening");
     } catch (error) {
       // Report it here, not as an unhandled rejection: the same sentence is
@@ -764,6 +793,7 @@ export function createAudioClient({
 
   /** The user turns the microphone off (or the page unloads). */
   async function stopCapture() {
+    captureRun += 1; // cancels a startCapture() that is still between its awaits
     state.capture = false;
     try { captureNode?.port?.postMessage?.("flush"); } catch { /* already gone */ }
     try { captureNode?.disconnect(); } catch { /* already gone */ }

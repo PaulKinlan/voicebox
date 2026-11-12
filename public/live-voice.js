@@ -215,10 +215,9 @@ const audioClient = createAudioClient({
       window.__voiceboxOnLiveError?.(error, info);
     }
     if (info?.fatal && info.code === "provider-key-missing") {
-      // FIRST RUN (voicebox-beads-cwx5.6): the host has no key for the live provider. Nothing is listening, so
-      // the microphone is released, and the person is taken to the field that fixes it rather than left to
-      // find the gear. The sentence itself comes from the audio client's label and stays on the stage.
-      void audioClient.stopCapture().catch(() => {});
+      // FIRST RUN (voicebox-beads-cwx5.6): the host has no key for the live provider. The audio client has
+      // already released the microphone (it does so for every fatal start failure); this takes the person to
+      // the field that fixes it rather than leaving them to find the gear. The sentence stays on the stage.
       const field = document.getElementById(`api-key-${info.provider === "claude" ? "anthropic" : info.provider}`)
         ?? document.getElementById("settings-api-keys");
       const settings = document.getElementById("settings");
@@ -256,9 +255,13 @@ const audioClient = createAudioClient({
       scheduleThinkingTraceFade();
       scheduleCaptionFade();
       window.__voiceboxOnLiveTurnComplete?.();
-      voiceState.textContent = capturing
-        ? "Live voice disconnected: machine-closed · mic off"
-        : "Live voice disconnected · mic off";
+      // A session that never started keeps the reason the host gave (and its remedy); the close is only the
+      // consequence of it.
+      voiceState.textContent = audioClient.snapshot().startFailure
+        ? audioClient.label()
+        : capturing
+          ? "Live voice disconnected: machine-closed · mic off"
+          : "Live voice disconnected · mic off";
     }
   },
 });
