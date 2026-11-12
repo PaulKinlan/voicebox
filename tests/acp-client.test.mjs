@@ -235,3 +235,69 @@ test("cancel() reports what it DID: a frame dropped because the peer is gone is 
   client.close();
   await assert.rejects(turn, (err) => err.refused === "acp-closed", "the closure settles the in-flight turn");
 });
+
+// ── voicebox-beads-cwx5.9: a prompt is bounded by SILENCE and by a BUDGET, not by one clock ───────────
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const chunk = (text) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "s", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } } });
+const toolUpdate = () => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "s", update: { sessionUpdate: "tool_call", title: "bash" } } });
+async function turnFixture(options, onPrompt, decide) {
+  const f = fixture((m, send) => {
+    if (m.method === "initialize") send(result(m, info));
+    if (m.method === "session/new") send(result(m, { sessionId: "s" }));
+    if (m.method === "session/prompt") onPrompt(m, send);
+  }, { ...options, ...(decide ? { decide } : {}) });
+  await f.client.initialize(); await f.client.newSession("/work");
+  return f;
+}
+
+test("a working harness outlives the silence bound: every update re-arms it, and the turn completes", async () => {
+  const f = await turnFixture({ timeoutMs: 1000, promptSilenceMs: 60, promptBudgetMs: 2000 }, async (m, send) => {
+    for (let i = 0; i < 6; i += 1) { await sleep(30); send(i % 2 ? chunk("x") : toolUpdate()); } // 180ms of work, never 60ms quiet
+    send(result(m, { stopReason: "end_turn" }));
+  });
+  assert.equal(await f.client.prompt("go"), "xxx", "three silences' worth of work must not time out");
+  f.client.close();
+});
+
+test("a harness that goes silent is stopped by name, and the name says silence", async () => {
+  const f = await turnFixture({ timeoutMs: 1000, promptSilenceMs: 40, promptBudgetMs: 2000 }, (_m, send) => { send(chunk("a")); });
+  await assert.rejects(f.client.prompt("go"), (err) => err.refused === "acp-timeout" && /went silent: the harness sent no update for 40ms/.test(err.message));
+  assert.equal(f.closed(), 1, "a silent harness is closed, not left running");
+});
+
+test("a harness that never stops talking is still bounded: the budget ends the turn", async () => {
+  let talking = true;
+  const f = await turnFixture({ timeoutMs: 1000, promptSilenceMs: 50, promptBudgetMs: 120 }, async (_m, send) => {
+    while (talking) { await sleep(15); if (talking) send(toolUpdate()); }
+  });
+  const started = Date.now();
+  await assert.rejects(f.client.prompt("go"), (err) => err.refused === "acp-timeout" && /exceeded its 120ms budget for one turn/.test(err.message));
+  talking = false;
+  assert.ok(Date.now() - started < 1000, "the budget, not the 1000ms request timeout, ended it");
+});
+
+test("the silence clock stops while the host decides a permission, and starts again once it has", async () => {
+  let release;
+  const f = await turnFixture({ timeoutMs: 1000, promptSilenceMs: 40, promptBudgetMs: 2000 }, (m, send) => {
+    send({ jsonrpc: "2.0", id: "perm", method: "session/request_permission", params: { sessionId: "s", options: [{ optionId: "allow", kind: "allow_once" }] } });
+    release = () => send(result(m, { stopReason: "end_turn" }));
+  }, async () => { await sleep(150); return { allow: true }; }); // a person takes ~4 silences to answer
+  const answer = f.client.prompt("go");
+  await sleep(170);
+  assert.equal(f.closed(), 0, "waiting on a person is not silence from the harness");
+  assert.ok(f.sent.some((m) => m.id === "perm" && m.result?.outcome?.outcome === "selected"));
+  // …and after the answer the clock is live again: with no further update the turn goes silent.
+  await assert.rejects(answer, { refused: "acp-timeout" });
+  assert.equal(typeof release, "function");
+});
+
+test("silence and budget are themselves bounded, and default to the old single clock", async () => {
+  assert.throws(() => fixture(null, { timeoutMs: 10, promptSilenceMs: 600001, promptBudgetMs: 700000 }), { refused: "unbounded-executor" });
+  assert.throws(() => fixture(null, { timeoutMs: 10, promptSilenceMs: 50, promptBudgetMs: 3600001 }), { refused: "unbounded-executor" });
+  assert.throws(() => fixture(null, { timeoutMs: 10, promptSilenceMs: 50, promptBudgetMs: 40 }), { refused: "unbounded-executor" }, "a budget shorter than the silence it contains is a contradiction");
+  // No prompt options: a chattering harness is still cut off at timeoutMs, exactly as before.
+  let talking = true;
+  const f = await turnFixture({ timeoutMs: 80 }, async (_m, send) => { while (talking) { await sleep(15); if (talking) send(toolUpdate()); } });
+  await assert.rejects(f.client.prompt("go"), { refused: "acp-timeout" });
+  talking = false;
+});

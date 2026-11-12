@@ -540,7 +540,8 @@ function refusalNames() {
   const sources = {
     "Extension admission gate (`core/extensions.ts`)": ["core/extensions.ts", /rule:\s*"([a-z][a-z0-9-]*)"/g],
     "Mini-app store (`lib/mini-app-store.mjs`)": ["lib/mini-app-store.mjs", /refused:\s*"([a-z][a-z0-9-]*)"/g],
-    "HTTP routes and workspace root boundary (`server.mjs`, `lib/routes/workspace.mjs`, `lib/routes/extensions.mjs`, `lib/routes/presence.mjs`, `lib/routes/mini-apps.mjs`, `lib/routes/guarded.mjs`, `core/root.ts`, `browser/acts.ts`)": ["server.mjs lib/routes/workspace.mjs lib/routes/extensions.mjs lib/routes/presence.mjs lib/routes/mini-apps.mjs lib/routes/guarded.mjs core/root.ts browser/acts.ts", /refused:\s*"([a-z][a-z0-9-]*)"/g],
+    // Every module under lib/routes/ is read, so a new route area needs no edit here.
+    "HTTP routes and workspace root boundary (`server.mjs`, `lib/routes/*.mjs`, `core/root.ts`, `browser/acts.ts`)": [["server.mjs", ...readdirSync(join(ROOT, "lib/routes")).filter((f) => f.endsWith(".mjs")).sort().map((f) => `lib/routes/${f}`), "core/root.ts", "browser/acts.ts"].join(" "), /refused:\s*"([a-z][a-z0-9-]*)"/g],
     "Extension runtime (`lib/extensions.mjs`)": ["lib/extensions.mjs", /refused:\s*"([a-z][a-z0-9-]*)"/g],
     "Task delegation and lifecycle (`core/tasks.ts`, `lib/tasks.mjs`)": ["core/tasks.ts lib/tasks.mjs", /(?:refused:\s*|(?:refusal|fail|no)\(\s*)"([a-z][a-z0-9-]*)"/g],
   };

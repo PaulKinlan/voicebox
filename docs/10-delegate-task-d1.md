@@ -41,7 +41,7 @@ Task events (which include the task prompt) are persisted in the active root's `
 
 1. **Pre-Flight Validation**: Validates caller authentication, checks that the prompt is within the 16,384-byte UTF-8 input budget (`task-input-over-budget`), and verifies that a task executor is installed via `installTaskExecutor()` (`executor-unavailable` if no harness is active).
 2. **Durable Queueing before Dispatch**: The `queued` event is appended and flushed to disk before the task handle is returned. Execution starts asynchronously on a subsequent event-loop turn only after a `running` event is persisted.
-3. **Concurrency & Resource Ceilings**: A machine host runs at most 8 concurrent tasks (4 in browser placement) with bounded wall-clock deadlines and a 64 KiB output cap (`task-capacity-exhausted`, `task-output-over-budget`).
+3. **Concurrency & Resource Ceilings**: A machine host runs at most 8 concurrent tasks (4 in browser placement) with a bounded deadline per task (30 minutes by default for a coding harness, 1 hour at most, plus a 5 minute silence bound; see [`11-acp-adapter.md`](11-acp-adapter.md)) and a 64 KiB cap on the final answer (`task-capacity-exhausted`, `task-output-over-budget`).
 4. **Crash Reconciliation (No Automatic Replay)**: If a host process exits while a task is `queued` or `running`, subsequent readback checks whether the original PID is still alive (`ESRCH`). Once confirmed absent, the task transitions to `interrupted` (`lib/task-interrupted.mjs`). Unfinished prompts are never automatically re-executed after a crash.
 5. **Closure & Surface Delivery Policy**: Every `task_view` includes:
    - `closurePolicy`: `{ onVoiceDisconnect: "continue", onEnvironmentClose: "continue-until-host-exit" | "interrupt", reconciliation }`

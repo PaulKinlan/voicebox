@@ -13,6 +13,15 @@ export interface TaskPlacementBounds {
   maxActiveTasks: number;
 }
 
+/**
+ * How long a delegated coding task may run when nobody configured a deadline (voicebox-beads-cwx5.9).
+ * Real engineering work takes minutes, so this is a budget for the whole task; a harness that stops
+ * making progress is caught much sooner by its adapter's silence bound.
+ */
+export const DEFAULT_TASK_BUDGET_MS = 1800000; // 30 min
+/** The longest deadline any machine or remote task may be given. */
+export const MAX_TASK_BUDGET_MS = 3600000; // 1 hour
+
 export const PLACEMENT_BOUNDS: Record<TaskPlacement, TaskPlacementBounds> = {
   browser: {
     defaultDeadlineMs: 30000,

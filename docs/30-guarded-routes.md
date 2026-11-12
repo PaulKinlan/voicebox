@@ -1,6 +1,6 @@
 # Guarded Routes: how HTTP routes declare their boundary
 
-Status: in use for the Mini-App routes; the remaining inline routes in `server.mjs` are being moved onto it (voicebox-beads-cwx5.1).
+Status: in use for the Mini-App, agent and permission routes; the remaining inline routes in `server.mjs` are being moved onto it (voicebox-beads-cwx5.1).
 
 Every HTTP route that changes state needs a security boundary. Until this design, that boundary was a line inside each handler, and `tests/csrf-route-seam.test.mjs` proved it was still there by scanning the source text of `server.mjs`. Adding or moving a route meant editing `server.mjs` and that test by hand, which made both files merge-conflict hotspots.
 
@@ -29,7 +29,7 @@ The host builds the area once and adds it to the dispatcher's list in `server.mj
 
 ```js
 const thingRoutes = createThingRoutes({ json, things });
-const guardedRoutes = createGuardedDispatcher({ routes: [...miniAppRoutes, ...thingRoutes], checks, json, readJsonBody });
+const guardedRoutes = createGuardedDispatcher({ routes: [...miniAppRoutes, ...agentRoutes, ...thingRoutes], checks, json, readJsonBody });
 ```
 
 That one list entry is the only edit to `server.mjs`. Two areas never touch the same lines of a handler.
@@ -46,6 +46,26 @@ That one list entry is the only edit to `server.mjs`. Two areas never touch the 
 | `room-authority` | The host token or the room session token | As `authority`, but a bare `Origin` header is not enough. |
 | `wall` | Anyone behind the host's auth wall | Nothing, on a mutating route. The route must give its reason in `because`. |
 
+## Route options
+
+| Option | Applies to | Meaning |
+|---|---|---|
+| `maxBytes` | Any route that reads a JSON body | The size cap the JSON door enforces. Defaults to 1 MiB. |
+| `body: "json"` | `csrf`, `host-token`, `authority`, `room-authority` | After the guard passes, read the body through the JSON door into `ctx.body`. An unauthorised caller is refused before any of its body is read. |
+| `refusal: { refused, why }` | The same four guards | What the route answers with a `403` when its guard fails, in place of the standard sentence. Use it when a route's refusal name is already part of the wire contract. |
+| `because` | `wall` | Required. Why this mutating route has no boundary of its own. |
+
+A key may contain parameters: `PATCH /api/agents/:id` matches exactly one path segment made of letters, digits, `_` and `-`, and the handler receives it as `ctx.params.id`. Dots, slashes and percent-escapes never match, so a parameter cannot smuggle a path. A literal key always wins over a parameterised one, and two parameterised keys that would match the same requests are refused at definition time.
+
+```js
+{
+  key: "PATCH /api/agents/:id",
+  guard: "authority",
+  body: "json",
+  handler: (_req, res, _url, { body, params }) => json(res, 200, agents.update(params.id, body)),
+}
+```
+
 ## How it works
 
 ```mermaid
@@ -54,10 +74,10 @@ flowchart TD
   Wall -- "no session" --> R401["401 loopback-unauthenticated"]
   Wall -- "ok" --> Lookup{"Key in the guarded table?<br/>METHOD + path"}
   Lookup -- "no" --> Legacy["Remaining inline routes<br/>in server.mjs"]
-  Lookup -- "yes" --> Guard{"Route's declared guard"}
+  Lookup -- "yes (literal key first,<br/>then :param keys)" --> Guard{"Route's declared guard"}
   Guard -- "check fails" --> R403["403 named refusal<br/>handler never runs"]
-  Guard -- "json" --> Door["Bounded JSON door<br/>415 / 413 answered here"]
-  Guard -- "check passes" --> Handler["Area handler<br/>lib/routes/&lt;area&gt;.mjs"]
+  Guard -- "json, or passes<br/>with body: json" --> Door["Bounded JSON door<br/>415 / 413 answered here"]
+  Guard -- "check passes,<br/>no body declared" --> Handler["Area handler<br/>lib/routes/&lt;area&gt;.mjs"]
   Door -- "body read" --> Handler
   Handler --> Res["Response"]
 ```
@@ -70,5 +90,6 @@ Three properties follow from the structure rather than from review:
 
 ## What is not covered yet
 
-- Routes whose path contains a parameter (`/api/agents/<id>`, `/api/environments/<key>`) still live inline in `server.mjs`. The key format is an exact `METHOD /api/path`; parameters are the next step.
+- A parameter matches one conservative segment. Routes that need a percent-decoded or free-form segment (`/api/environments/<key>`) still live inline in `server.mjs` until that area is moved.
+- Most inline routes in `handle()` are still to be moved, one area per pull request.
 - The loopback auth wall and the WebSocket upgrades (`/live`, `/channel`) are separate boundaries and are unchanged. See [`18-loopback-session-auth.md`](18-loopback-session-auth.md).
