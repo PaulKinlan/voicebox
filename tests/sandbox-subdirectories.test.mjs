@@ -232,6 +232,24 @@ test("mini-app persistence and harness configure aliases in server.mjs", async (
   assert.equal(listApps.count, 1);
   assert.equal(listApps.apps[0].appId, "app_counter-widget");
 
+  // The voice lists the saved apps the Home card shows, and opens one by its title.
+  const turn = (action) => fetch(`${srv.base}/api/turn`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action }),
+  }).then((r) => r.json());
+  const voiceList = await turn({ verb: "list_mini_apps" });
+  assert.equal(voiceList.result.ok, true);
+  assert.deepEqual(voiceList.result.apps.map((a) => a.appId), ["app_counter-widget"]);
+  assert.match(voiceList.result.action, /Counter Widget/);
+  const voiceOpen = await turn({ verb: "open_mini_app", target: "counter widget", html: "<h1>ignored</h1>" });
+  assert.equal(voiceOpen.result.ok, true);
+  assert.equal(voiceOpen.result.miniApp.appId, "app_counter-widget");
+  assert.equal(voiceOpen.result.miniApp.html, "<h1>v2</h1>", "opening never writes the app");
+  const voiceMissing = await turn({ verb: "open_mini_app", target: "no such app" });
+  assert.equal(voiceMissing.result.ok, false);
+  assert.equal(voiceMissing.result.refused, "mini-app-not-found");
+
   const getApp = await fetch(`${srv.base}/api/mini-apps?id=counter-widget`).then((r) => r.json());
   assert.equal(getApp.ok, true);
   assert.equal(getApp.miniApp.html, "<h1>v2</h1>");

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { COMMANDS, COMMAND_VERBS, commandToAction, functionDeclarations, liveSystemInstruction } from "../lib/commands.mjs";
 
 test("the list declares file and extension actions — the executor's verbs, once", () => {
-  assert.deepEqual([...COMMAND_VERBS].sort(), ["contact_agent", "delegate_task", "delete", "diff", "edit", "exec", "extension", "extensions", "git_diff", "git_log", "git_status", "grep", "inspect_environment", "list", "list_agents", "list_tools", "mini_app", "open_workspace", "propose_extension", "read", "search_tools", "undo", "write"]);
+  assert.deepEqual([...COMMAND_VERBS].sort(), ["contact_agent", "delegate_task", "delete", "diff", "edit", "exec", "extension", "extensions", "git_diff", "git_log", "git_status", "grep", "inspect_environment", "list", "list_agents", "list_mini_apps", "list_tools", "mini_app", "open_mini_app", "open_workspace", "propose_extension", "read", "search_tools", "undo", "write"]);
   const names = COMMANDS.map((c) => c.name);
   assert.equal(new Set(names).size, names.length, "command names must be unique");
 });
@@ -56,6 +56,15 @@ test("commandToAction maps a tool call to the executor's action shape", () => {
   assert.deepEqual(commandToAction("search_tools", { query: "beads", kind: "system", limit: 10 }), { verb: "search_tools", name: "", query: "beads", kind: "system", limit: 10 });
   assert.deepEqual(commandToAction("run_command", { command: "bd --version", cwd: "lib" }), { verb: "exec", name: "", command: "bd --version", cwd: "lib" });
   assert.deepEqual(commandToAction("open_workspace", { target: "self", project: "voicebox" }), { verb: "open_workspace", name: "", target: "self", project: "voicebox" });
+});
+
+test("the voice can list and open a saved Mini-App by name, without writing html", () => {
+  assert.deepEqual(commandToAction("list_mini_apps"), { verb: "list_mini_apps", name: "" });
+  assert.deepEqual(commandToAction("open_mini_app", { app: " Calculator " }), { verb: "open_mini_app", target: "Calculator" });
+  assert.equal(commandToAction("open_mini_app", {}).refused, "missing-argument");
+  const instruction = liveSystemInstruction();
+  assert.match(instruction, /open_mini_app/);
+  assert.match(instruction, /list_mini_apps/);
 });
 
 test("extension calls preserve arguments and refuse malformed values", () => {
