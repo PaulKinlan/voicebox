@@ -755,8 +755,14 @@ export function createAudioClient({
       // Report it here, not as an unhandled rejection: the same sentence is
       // written by the page adapter's catch, so both paths agree.
       state.captureErrorReason = state.captureErrorReason || "device";
-      state.captureError = `The microphone is not available: ${error?.message ?? error}. Typing still works.`;
+      // A chosen microphone that has left the machine fails the `exact` constraint. Name that, rather than
+      // a bare "not available" that reads as a broken or blocked microphone.
+      state.captureError = deviceId && error?.name === "OverconstrainedError"
+        ? "The chosen microphone is not connected. Plug it back in, or pick another in Settings. Typing still works."
+        : `The microphone is not available: ${error?.message ?? error}. Typing still works.`;
       state.lastError = state.captureError;
+      // The debug export showed nothing at all for this failure: record what the browser actually said.
+      onDiagnostic({ kind: "capture-failed", name: error?.name ?? null, message: String(error?.message ?? error), deviceChosen: Boolean(deviceId) });
       emit("error", { captureFailed: true });
     }
   }

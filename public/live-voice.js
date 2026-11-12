@@ -360,7 +360,14 @@ async function startLive() {
       // The preferred microphone is read at press time, not at load: choosing a
       // device must not start capture, and a chosen device that has gone is a
       // refusal the page names rather than a silent switch to another one.
-      await audioClient.startCapture({ deviceId: window.__voiceboxDevices?.micId() ?? null });
+      // A saved microphone that is no longer plugged in is not asked for: the device list is read first
+      // and capture uses the system default instead, said out loud rather than switched silently.
+      const devicesSurface = window.__voiceboxDevices;
+      const chosen = (await devicesSurface?.micForCapture?.()) ?? { deviceId: devicesSurface?.micId?.() ?? null, missing: null };
+      await audioClient.startCapture({ deviceId: chosen.deviceId });
+      if (chosen.missing && audioClient.snapshot().capture && voiceState) {
+        voiceState.textContent = `${chosen.missing} is not connected, so voice is listening through the system default microphone.`;
+      }
       const preferredOutput = window.__voiceboxDevices?.outputId() ?? null;
       if (preferredOutput) {
         await audioClient.setOutputDevice?.(preferredOutput);

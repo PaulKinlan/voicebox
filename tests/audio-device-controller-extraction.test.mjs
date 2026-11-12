@@ -79,6 +79,23 @@ const CITED_SPANS = [
     endBeforeRe: /^ {2}devices\.namesVisible/,
   },
   {
+    // Paul, 2026-11-12: a saved microphone that is unplugged is not asked for; capture falls back to the
+    // system default and says so. While that happens, the row must not claim it is listening through the
+    // saved device — it names the default and the missing one.
+    bead: "mic-missing-fallback",
+    name: "listening on the default names the missing saved microphone",
+    startRe: /^ {2}else if \(listening\) mic = /,
+    endBeforeRe: /^ {2}else if \(micPresent\)/,
+  },
+  {
+    // The same change: a refresh stops capture only when the saved microphone was LISTED and has now left.
+    // A saved microphone already missing at press time was never asked for, so capture is on the default.
+    bead: "mic-missing-fallback",
+    name: "refreshDevices stops capture only for a microphone that was listed and has left",
+    startRe: /^ {2}(const before = |\/\/ "Before" for the microphone)/,
+    endBeforeRe: /^ {2}const listed = /,
+  },
+  {
     // voicebox-beads-cqrd, the other cited change since the extraction: the refusal branch of the
     // output-change handler repaints BEFORE it writes the reason, and puts the picker back, because the
     // repaint's generic line was overwriting the refusal the person needed to read. This is the branch as
@@ -285,7 +302,7 @@ function assertHostContract(hostSource, moduleSource) {
   assert.match(hostSource, /audioDeviceController\.loadPrefs\(\);/, "the host still loads the stored preference at boot");
   assert.match(
     hostSource,
-    /window\.__voiceboxDevices = \{\s*micId: audioDeviceController\.micId,\s*outputId: audioDeviceController\.outputId,\s*state: audioDeviceController\.state,\s*refresh: audioDeviceController\.refresh,\s*\};/,
+    /window\.__voiceboxDevices = \{\s*micId: audioDeviceController\.micId,\s*micForCapture: audioDeviceController\.micForCapture,\s*outputId: audioDeviceController\.outputId,\s*state: audioDeviceController\.state,\s*refresh: audioDeviceController\.refresh,\s*\};/,
     "window.__voiceboxDevices keeps its shape and reads the module's accessors",
   );
   assert.match(hostSource, /addEventListener\("devicechange", audioDeviceController\.refresh\)/, "the devicechange listener must call the module's refresh");
@@ -569,4 +586,37 @@ test("driven standalone, the module uses its injected deps and never touches the
   assert.equal(result.nothingStored, true, "merely loading and rendering must not write the preference");
   assert.equal(result.hasLoadPrefs, "function", "the host needs loadPrefs as a returned member");
   assert.equal(result.hasRefresh, "function", "window.__voiceboxDevices.refresh needs the controller's own refresh");
+});
+
+test("an unplugged saved microphone is not asked for: capture uses the default and the saved name comes back", async () => {
+  // Paul, 2026-11-12: "we need to scan for microphones so we don't use ones that don't exist".
+  const result = await page.evaluate(async () => {
+    const real = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+    const plugged = [{ kind: "audioinput", deviceId: "mic-still-here", label: "Laptop microphone" }];
+    navigator.mediaDevices.enumerateDevices = async () => plugged;
+    const { createAudioDeviceController } = await import("/components/audio-device-controller.mjs");
+    const store = new Map();
+    const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+    const make = (saved) => {
+      store.set("voicebox.devices", JSON.stringify({ mic: saved, out: { id: "", name: "" } }));
+      const c = createAudioDeviceController({ els: {}, on: () => {}, getLiveClient: () => null, storage });
+      c.loadPrefs();
+      return c;
+    };
+    const gone = await make({ id: "mic-that-left", name: "Desk microphone" }).micForCapture();
+    const here = await make({ id: "mic-still-here", name: "Laptop microphone" }).micForCapture();
+    const none = await make({ id: "", name: "" }).micForCapture();
+    // Ids hidden (no microphone access yet): absence cannot be seen, so the saved id is still tried.
+    plugged[0] = { kind: "audioinput", deviceId: "", label: "" };
+    const hidden = await make({ id: "mic-that-left", name: "Desk microphone" }).micForCapture();
+    const keptPref = make({ id: "mic-that-left", name: "Desk microphone" });
+    await keptPref.micForCapture();
+    navigator.mediaDevices.enumerateDevices = real;
+    return { gone, here, none, hidden, keptId: keptPref.micId() };
+  });
+  assert.deepEqual(result.gone, { deviceId: null, missing: "Desk microphone" }, "a missing saved mic falls back to the default and is named");
+  assert.deepEqual(result.here, { deviceId: "mic-still-here", missing: null }, "a present saved mic is used");
+  assert.deepEqual(result.none, { deviceId: null, missing: null }, "no saved mic means the default");
+  assert.deepEqual(result.hidden, { deviceId: "mic-that-left", missing: null }, "with ids hidden the saved id is still tried");
+  assert.equal(result.keptId, "mic-that-left", "the preference is kept, so plugging it back in makes it the mic again");
 });

@@ -779,3 +779,20 @@ test("ended session: the microphone clause follows the capture state instead of 
   assert.match(client.label(), /Live session ended/, "the reason stays");
   assert.doesNotMatch(client.label(), /still on/, "but it no longer claims a microphone that has been stopped");
 });
+
+test("state: a chosen microphone that has been unplugged is named as not connected, and the browser's error is recorded", async () => {
+  // Paul, 2026-11-12: an unplugged microphone that was still the saved choice showed "The microphone is not
+  // available: ." — Chrome's OverconstrainedError has an empty message — and the debug export had nothing.
+  const media = fakeMedia();
+  media.mediaDevices.getUserMedia = async () => { const e = new Error(""); e.name = "OverconstrainedError"; throw e; };
+  const diagnostics = [];
+  const { client } = makeClient({ mediaDevices: media.mediaDevices, onDiagnostic: (d) => diagnostics.push(d) });
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
+  await client.startCapture({ deviceId: "mic-that-left" });
+  assert.match(client.label(), /chosen microphone is not connected/i);
+  assert.doesNotMatch(client.label(), /not available: \./, "no empty error sentence");
+  const failed = diagnostics.find((d) => d.kind === "capture-failed");
+  assert.ok(failed, "the capture failure must reach the debug diagnostics");
+  assert.equal(failed.name, "OverconstrainedError");
+  assert.equal(failed.deviceChosen, true);
+});

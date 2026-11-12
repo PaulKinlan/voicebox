@@ -3441,6 +3441,7 @@ micHotkeyController.loadHotkey();
 window.__voiceboxHotkey = { get: micHotkeyController.getHotkey, set: micHotkeyController.setHotkey };
 window.__voiceboxDevices = {
   micId: audioDeviceController.micId,
+  micForCapture: audioDeviceController.micForCapture,
   outputId: audioDeviceController.outputId,
   state: audioDeviceController.state,
   refresh: audioDeviceController.refresh,

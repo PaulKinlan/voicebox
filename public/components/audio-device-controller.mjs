@@ -122,7 +122,9 @@ function renderDevices() {
   if (!prefs.mic.id && !inputIdsUsable) mic = listening ? "Listening through System default" : "Mic off · this browser lists no named microphones until you allow access";
   else if (!prefs.mic.id) mic = listening ? "Listening through System default" : "Mic off";
   else if (micNamesHidden && !micPresent) mic = `${micName} · not checked yet — device names can be hidden until microphone access is allowed`;
-  else if (listening) mic = `Listening through ${micName}`;
+  else if (listening) mic = !micPresent && namesVisible && prefs.mic.id
+    ? `Listening through System default · ${micName} is not connected`
+    : `Listening through ${micName}`;
   else if (micPresent) mic = `${micName} · mic off`;
   else mic = `${micName} is not connected. Mic off.`;
   if (els.micDeviceState) els.micDeviceState.textContent = mic;
@@ -150,7 +152,10 @@ function renderDevices() {
 }
 
 async function refreshDevices() {
-  const before = { mic: devices.prefs.mic.id, out: devices.prefs.out.id };
+  // "Before" for the microphone means LISTED before: only a saved microphone that was here and has now
+  // left can be the one capture is using. One that was already missing at press time was never asked
+  // for (micForCapture), so capture is on the system default and stopping it would end a working session.
+  const before = { mic: devices.inputs.some((d) => d.id === devices.prefs.mic.id) ? devices.prefs.mic.id : "", out: devices.prefs.out.id };
   const listed = await listDevices();
   devices.inputs = listed.inputs;
   devices.outputs = listed.outputs;
@@ -213,6 +218,26 @@ on(els.outSelect, "change", async () => {
   }
   renderDevices();
 });
+  // THE SAVED MICROPHONE IS CHECKED AGAINST WHAT IS PLUGGED IN, AT PRESS TIME (Paul, 2026-11-12: "we
+  // need to scan for microphones so we don't use ones that don't exist"). Asking getUserMedia for an
+  // `exact` id that has left the machine is a refusal every time, and the person saw only "the
+  // microphone is not available" with no way to tell it was the saved choice that was missing. So the
+  // list is read first: a saved id that is not in it is NOT asked for, capture uses the system default,
+  // and the caller gets the saved name back so it can say so — the switch is named, never silent. The
+  // preference itself is kept, so plugging the device back in makes it the microphone again.
+  // A list whose ids are hidden (no microphone access yet) cannot show absence, so the saved id is tried.
+  async function micForCapture() {
+    const saved = devices.prefs.mic;
+    if (!saved.id) return { deviceId: null, missing: null };
+    let listed;
+    try { listed = await listDevices(); } catch { return { deviceId: saved.id, missing: null }; }
+    devices.inputs = listed.inputs;
+    devices.namesVisible = listed.names === true;
+    const idsUsable = listed.inputs.some((d) => d.id);
+    if (!idsUsable || listed.inputs.some((d) => d.id === saved.id)) return { deviceId: saved.id, missing: null };
+    return { deviceId: null, missing: saved.name || "The chosen microphone" };
+  }
+
   // The page global the host publishes (window.__voiceboxDevices) is built from these accessors rather
   // than from the record itself: the three device facts stay readable by whoever asks, and the record
   // stays private to the module that owns it.
@@ -220,6 +245,7 @@ on(els.outSelect, "change", async () => {
     loadPrefs,
     refresh: refreshDevices,
     micId: () => devices.prefs.mic.id || null,
+    micForCapture,
     outputId: () => devices.prefs.out.id || null,
     state: () => ({ ...devices.prefs, policy: devices.policy }),
   };
