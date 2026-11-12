@@ -55,6 +55,8 @@ Guides covering task delegation to external coding agents, interactive Web MCP M
 | [`27-factory-findings-triage.md`](27-factory-findings-triage.md) | **Factory Findings Triage** | The private `--sink file` report to public-issue pipeline: severity and identity routing, credential sanitisation, the deliberate embargo bypass declared on each issue, fingerprint dedupe, and the reviewed `--promote` path that is the only way a bead is created. |
 | [`26-harness-project-live-loop.md`](26-harness-project-live-loop.md) | **Harness & Project Live Integration Loop** | Bidirectional context & workspace diff loop (`lib/harness-project-loop.mjs`) connecting coding harnesses (`lib/pi-acp.mjs`, `lib/claude-acp.mjs`, `lib/cli-harness-executor.mjs`) with the active project workspace. |
 | [`28-factory-review-adapter.md`](28-factory-review-adapter.md) | **Local Software Factory Review Adapter** | Bounded local review-trigger adapter (base..tip -> diff-relevant station via fleet-heavy), inbound issue poller with loop guard, and publisher integration. |
+| [`29-mini-apps-vs-mcp-apps.md`](29-mini-apps-vs-mcp-apps.md) | **Mini-Apps, WebMCP and MCP Apps** | Side-by-side comparison of Voicebox Mini-Apps (`public/mini-app-sdk.js`) with the WebMCP draft and the MCP Apps specification, and a recommendation for launch. |
+| [`30-guarded-routes.md`](30-guarded-routes.md) | **Guarded Routes** | How an HTTP route declares its security boundary as data (`lib/routes/guarded.mjs`), the seven guards, and how to add a route without editing `handle()` in `server.mjs`. |
 
 ---
 
