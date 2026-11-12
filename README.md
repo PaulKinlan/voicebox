@@ -20,6 +20,12 @@ npm start
 ```
 The server starts at `http://localhost:8787` (bound to `127.0.0.1`; override port with `PORT=...`).
 
+For frontend work with hot reload, run two processes: the server and the Vite front that proxies to it. `npm run dev` does not start the server, and Vite prints a warning naming `npm run serve` when nothing answers on the API port.
+```bash
+npm run serve   # terminal 1: server.mjs on http://127.0.0.1:8787, restarts on edits
+npm run dev     # terminal 2: Vite on http://localhost:5173, proxies /api, /live, /channel
+```
+
 ### 3. Configure API Keys
 You can configure provider keys in either of two ways:
 - **In the Browser UI (Recommended)**: Click **Settings (⚙)** in the top bar and paste your Gemini, OpenAI, or Anthropic API key. Keys are saved to the host's `0600` credential store (`GET` / `PUT /api/keys`) and take effect immediately without restarting the server.
