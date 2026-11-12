@@ -688,3 +688,94 @@ test("barge-in: the MODEL's own interrupt flushes the buffered tail without aski
   assert.equal(snap.capture, true, "capture keeps running");
   assert.equal(interruptsSent(socket).length, 0, "the model already stopped: the page must not ask it to stop again");
 });
+
+// ── A session that cannot START (voicebox-beads-cwx5.6) ──────────────────────────────────────────────
+// Measured on a fresh clone with no provider key: the host sent {type:"error", error:"GEMINI_API_KEY is not
+// set…"} and closed the socket, the client read `msg.message` (absent), and the stage sat on "Waiting for the
+// model · 0 frame(s) held until setup completes" for as long as anyone looked at it.
+test("start failure: a fatal error frame is reported with its remedy, survives the close, and is never 'Waiting for the model'", async () => {
+  const { client, events } = makeClient();
+  // attachSocket() is what installs the close handler, so the socket is attached the way the page attaches it.
+  const socket = fakeSocket();
+  client.attachSocket(socket);
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
+  client.handleMessage(JSON.stringify({ type: "error", fatal: true, code: "provider-key-missing", provider: "gemini", error: "GEMINI_API_KEY is not set — the live session cannot start" }));
+  assert.equal(typeof socket.onclose, "function", "the close handler must be installed for this test to mean anything");
+  socket.onclose({ code: 1011, reason: "live session failed to start" });
+
+  const fatal = events.errors.find((e) => e.fatal);
+  assert.ok(fatal, "the page is told this is fatal, not a malformed frame");
+  assert.equal(fatal.code, "provider-key-missing");
+  assert.equal(fatal.provider, "gemini");
+  assert.match(client.label(), /No Gemini API key is set on this host.*Add one in Settings/, "the label names the remedy");
+  assert.doesNotMatch(client.label(), /connection closed/, "the close that follows must not replace the reason");
+
+  // A press that arrives AFTER the refusal must not open a microphone for nobody.
+  await client.startCapture();
+  assert.doesNotMatch(client.label(), /Waiting for the model/, "a refused session is not waiting for anything");
+  assert.match(client.label(), /No Gemini API key/);
+  assert.equal(client.snapshot().capture, false, "the microphone is released: nothing is listening");
+});
+
+test("start failure: the host's `error` field is read on a non-fatal notice too, and the session stays up", () => {
+  const { client, events } = makeClient();
+  client.handleMessage(JSON.stringify({ type: "error", error: "dropped malformed audio frame — odd byte length (the session is fine)" }));
+  assert.match(events.errors.at(-1).message, /dropped malformed audio frame/, "not the placeholder 'server error'");
+  assert.equal(events.errors.at(-1).fatal, false);
+  assert.equal(client.snapshot().startFailure, null);
+});
+
+test("start failure: attaching a new socket clears it, so the next press starts clean", () => {
+  const { client } = makeClient();
+  client.handleMessage(JSON.stringify({ type: "error", fatal: true, code: "provider-key-missing", provider: "openai", error: "OPENAI_API_KEY is not set" }));
+  assert.match(client.label(), /No OpenAI API key/);
+  client.attachSocket(fakeSocket());
+  assert.equal(client.snapshot().startFailure, null);
+  assert.equal(client.snapshot().sessionEnded, false);
+  assert.doesNotMatch(client.label(), /No OpenAI API key/, "the old refusal does not outlive its connection");
+});
+
+test("start failure: ANY fatal code releases a microphone that was already capturing", async () => {
+  const { client, media } = makeClient();
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
+  await client.startCapture();
+  assert.equal(client.snapshot().capture, true);
+  client.handleMessage(JSON.stringify({ type: "error", fatal: true, code: "live-session-failed", error: "the provider refused the session" }));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(client.snapshot().capture, false, "not only provider-key-missing: every fatal start failure releases capture");
+  assert.equal(client.snapshot().phase, "error");
+  assert.equal(client.label(), "the provider refused the session");
+});
+
+test("start failure: a fatal frame that lands while the microphone is still opening cancels the start cleanly", async () => {
+  // getUserMedia is held open so the frame arrives BETWEEN the awaits of startCapture().
+  let release;
+  const stopped = [];
+  const track = { stop() { stopped.push("stop"); } };
+  const mediaDevices = { getUserMedia: () => new Promise((resolve) => { release = () => resolve({ getTracks: () => [track] }); }) };
+  const { client } = makeClient({ mediaDevices });
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
+  const starting = client.startCapture();
+  await new Promise((r) => setTimeout(r, 0));
+  client.handleMessage(JSON.stringify({ type: "error", fatal: true, code: "provider-key-missing", provider: "gemini", error: "GEMINI_API_KEY is not set" }));
+  release();
+  await starting;
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(client.snapshot().capture, false);
+  assert.deepEqual(stopped, ["stop"], "the device this start opened is released, not leaked");
+  assert.equal(client.snapshot().captureError, "", "and it is NOT reported as a broken microphone");
+  assert.match(client.label(), /No Gemini API key/, "the remedy is still what the stage says");
+});
+
+test("ended session: the microphone clause follows the capture state instead of freezing at the moment it ended", async () => {
+  const { client } = makeClient();
+  const socket = fakeSocket();
+  client.attachSocket(socket);
+  client.handleMessage(JSON.stringify({ type: "rate", inputRate: 16000, provider: "gemini" }));
+  await client.startCapture();
+  socket.onclose({ code: 1006, reason: "" });
+  assert.match(client.label(), /Live session ended.*Your microphone is still on/);
+  await client.stopCapture();
+  assert.match(client.label(), /Live session ended/, "the reason stays");
+  assert.doesNotMatch(client.label(), /still on/, "but it no longer claims a microphone that has been stopped");
+});

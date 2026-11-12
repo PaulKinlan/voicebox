@@ -62,3 +62,16 @@ The `/channel` WebSocket endpoint in `server.mjs` enforces an entitlement check 
 ```bash
 node --test tests/channel.test.mjs
 ```
+
+---
+
+## 4. `/live` Error Frames (`server.mjs`, `public/audio-client.js`)
+
+The `/live` socket carries two kinds of `{ "type": "error" }` text frame, and the page treats them differently:
+
+| Frame | Meaning | Page behaviour |
+|---|---|---|
+| `{ type: "error", error }` or `{ type: "error", message }` | A notice about one dropped frame (malformed audio, invalid video, a rate mismatch). The session is fine. | Recorded as a refused frame; the session continues. |
+| `{ type: "error", fatal: true, code, provider?, error }` | The live session could not **start**. The host closes the socket with `1011` straight after. | The session is marked ended with this reason, the microphone is released for every fatal code (a capture that is still opening is cancelled), and the stage shows the sentence until the next press. |
+
+`code` is `provider-key-missing` when the live provider has no API key (`lib/live-providers/*.mjs` throw it with `provider` set to `gemini`, `openai` or `claude`), and `live-session-failed` for any other start failure. For `provider-key-missing` the page names the provider, opens **Settings** and focuses that key's field. Covered by `tests/client-audio.test.mjs`.

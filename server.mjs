@@ -29,6 +29,7 @@ import { createHarnessRoutes } from "./lib/routes/harnesses.mjs";
 import { createToolCatalogRoutes } from "./lib/routes/tool-catalog.mjs";
 import { createGeminiMediaRoutes } from "./lib/routes/gemini-media.mjs";
 import { createExtensionRoutes } from "./lib/routes/extensions.mjs";
+import { createMiniAppRoutes } from "./lib/routes/mini-apps.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
 import { CORE_FS_DESCRIPTOR, createUnifiedDiff, dispatchFor } from "./core/dispatch.ts";
@@ -63,7 +64,7 @@ import { liveToolDeclarations } from "./lib/wasm-shelf.mjs";
 import { redactSecrets, redactObject } from "./lib/redact.mjs";
 import { timingSafeStringEqual } from "./lib/timing-safe.mjs";
 import { MiniAppRegistry, validateMiniAppToolArgs } from "./lib/mini-app-host.mjs";
-import { saveMiniApp, discoverMiniApps, getMiniApp, deleteMiniApp } from "./lib/mini-app-store.mjs";
+import { saveMiniApp, getMiniApp } from "./lib/mini-app-store.mjs";
 import { createClaudeAcpExecutor, describeClaudeAdapterInstall, CLAUDE_ACP_TIMEOUT_CEILING_MS } from "./lib/claude-acp.mjs";
 import {
   createAntigravityExecutor,
@@ -4272,6 +4273,20 @@ const workspaceRoutes = createWorkspaceRoutes({
   contentJsonBodyMaxBytes: CONTENT_JSON_BODY_MAX_BYTES,
   selfEnvironment: SELF_ENVIRONMENT,
 });
+// Mini-App routes read the active root at request time and announce a saved or deleted app on the
+// same two sockets the host owns; the registry is the one live instance, never a copy.
+const miniAppRoutes = createMiniAppRoutes({
+  getRootPath: () => (active?.root?.kind === "machine" ? active.root.path : WORKSPACE),
+  registry: activeMiniAppRegistry,
+  sendToRoom: (frame) => {
+    try { pageSocket?.send(frame); } catch {}
+    try { runningSession?.socket?.send(frame); } catch {}
+  },
+  json,
+  readJsonBody,
+  BodyRefusal,
+  contentJsonBodyMaxBytes: CONTENT_JSON_BODY_MAX_BYTES,
+});
 const extensionRoutes = createExtensionRoutes({
   json,
   readJsonBody,
@@ -4539,116 +4554,7 @@ async function handle(req, res) {
     return json(res, 200, result);
   }
 
-  if (req.method === "GET" && url.pathname === "/api/mini-apps") {
-    const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
-    const id = (url.searchParams.get("id") ?? url.searchParams.get("appId") ?? "").trim();
-    if (id) {
-      const found = getMiniApp(id, { rootPath });
-      return json(res, found.ok ? 200 : 404, found);
-    }
-    const discovered = discoverMiniApps({ rootPath });
-    let apps = discovered.miniApps ?? [];
-    const kindFilter = (url.searchParams.get("kind") ?? "").trim().toLowerCase();
-    if (kindFilter) {
-      apps = apps.filter((a) => (a.kind ?? "app") === kindFilter);
-    }
-    return json(res, 200, { ok: true, apps, miniApps: apps, count: apps.length });
-  }
-
-  if ((req.method === "POST" || req.method === "PUT") && url.pathname === "/api/mini-apps") {
-    // The body CARRIES the mini-app's html — content, so the larger cap (voicebox-beads-d808).
-    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
-    if (!body || typeof body !== "object") {
-      return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });
-    }
-    const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
-    const saved = saveMiniApp({ ...body, rootPath });
-    if (!saved.ok) return json(res, 400, saved);
-    const frame = JSON.stringify({
-      type: "mini_app",
-      miniApp: saved.miniApp,
-      created: saved.created,
-      updated: saved.updated,
-    });
-    try { pageSocket?.send(frame); } catch {}
-    try { runningSession?.socket?.send(frame); } catch {}
-    return json(res, 200, saved);
-  }
-
-  if (req.method === "DELETE" && url.pathname === "/api/mini-apps") {
-    // A BodyRefusal must propagate — the door already answered it (voicebox-beads-d808).
-    const body = await readJson().catch((err) => { if (err instanceof BodyRefusal) throw err; return {}; });
-    const id = String(body?.appId ?? body?.id ?? url.searchParams.get("id") ?? url.searchParams.get("appId") ?? "").trim();
-    const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
-    const deleted = deleteMiniApp(id, { rootPath });
-    if (!deleted.ok) return json(res, deleted.refused === "mini-app-not-found" || deleted.refused === "not-found" ? 404 : 400, deleted);
-    if (deleted.miniApp?.appId) activeMiniAppRegistry.unregisterApp(deleted.miniApp.appId);
-    if (id) activeMiniAppRegistry.unregisterApp(id);
-    const frame = JSON.stringify({
-      type: "mini_app_deleted",
-      appId: deleted.miniApp?.appId ?? id,
-      miniApp: deleted.miniApp,
-    });
-    try { pageSocket?.send(frame); } catch {}
-    try { runningSession?.socket?.send(frame); } catch {}
-    return json(res, 200, deleted);
-  }
-
-  if (req.method === "GET" && url.pathname === "/api/mini-app/tools") {
-    return json(res, 200, {
-      ok: true,
-      tools: activeMiniAppRegistry.getAllTools(),
-      declarations: activeMiniAppRegistry.getFunctionDeclarations(),
-    });
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/mini-app/tools") {
-    let bodyStr = "", bytes = 0, tooLarge = false;
-    await new Promise((resolve) => {
-      req.on("data", (chunk) => {
-        bytes += chunk.length;
-        if (bytes > 65536) {
-          tooLarge = true;
-        } else {
-          bodyStr += chunk;
-        }
-      });
-      req.on("end", resolve);
-    });
-
-    if (tooLarge) {
-      return json(res, 400, { ok: false, refused: "body-too-large", why: "request body exceeds maximum allowed bound of 65536 bytes" });
-    }
-
-    let body;
-    try {
-      body = JSON.parse(bodyStr || "{}");
-    } catch {
-      return json(res, 400, { ok: false, refused: "bad-json", why: "request body must be valid JSON" });
-    }
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return json(res, 400, { ok: false, refused: "bad-json", why: "request body must be a JSON object" });
-    }
-
-    const appId = String(body.appId ?? "").trim();
-    const tools = Array.isArray(body.tools) ? body.tools : [];
-    for (const prevId of [...activeMiniAppRegistry.apps.keys()]) {
-      if (prevId !== appId) activeMiniAppRegistry.unregisterApp(prevId);
-    }
-    if (appId) {
-      if (tools.length === 0) {
-        activeMiniAppRegistry.unregisterApp(appId);
-      } else {
-        activeMiniAppRegistry.registerApp(appId, { title: body?.title });
-        activeMiniAppRegistry.updateTools(appId, tools);
-      }
-    }
-    return json(res, 200, {
-      ok: true,
-      appId: appId || null,
-      tools: activeMiniAppRegistry.getAllTools(),
-    });
-  }
+  if (await miniAppRoutes(req, res, url)) return;
 
   if (await workspaceRoutes(req, res, url, "write")) return;
 
@@ -5721,7 +5627,15 @@ server.on("upgrade", (req, socket) => {
         socket: ws,
       };
     } catch (e) {
-      ws.send(JSON.stringify({ type: "error", error: e?.message ?? String(e) }));
+      // FATAL, AND NAMED (voicebox-beads-cwx5.6): this frame is the only thing the page learns about a session
+      // that never started. `fatal` separates it from the dropped-frame notices below ("the session is fine"),
+      // and `code` lets the page offer the remedy — for a missing key, the Settings field — instead of a wait.
+      ws.send(JSON.stringify({
+        type: "error", fatal: true,
+        code: typeof e?.code === "string" ? e.code : "live-session-failed",
+        ...(typeof e?.provider === "string" ? { provider: e.provider } : {}),
+        error: e?.message ?? String(e),
+      }));
       ws.close(1011, "live session failed to start");
       return;
     }
