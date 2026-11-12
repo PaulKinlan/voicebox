@@ -32,6 +32,8 @@ import { createExtensionRoutes } from "./lib/routes/extensions.mjs";
 import { createMiniAppRoutes } from "./lib/routes/mini-apps.mjs";
 import { createAgentRoutes } from "./lib/routes/agents.mjs";
 import { createPermissionRoutes } from "./lib/routes/permissions.mjs";
+import { createTransportRoutes } from "./lib/routes/transport.mjs";
+import { createCommandRoutes } from "./lib/routes/commands.mjs";
 import { createGuardedDispatcher } from "./lib/routes/guarded.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
@@ -4301,11 +4303,30 @@ const agentRoutes = createAgentRoutes({
   json,
 });
 const permissionRoutes = createPermissionRoutes({ permissions, json });
+const transportRoutes = createTransportRoutes({
+  getActive: () => active,
+  noRootDeclared,
+  exportBundle: exportWorkspaceBundle,
+  importBundle: importWorkspaceBundle,
+  selfEnvironment: SELF_ENVIRONMENT,
+  json,
+  contentJsonBodyMaxBytes: CONTENT_JSON_BODY_MAX_BYTES,
+});
+const commandRoutes = createCommandRoutes({
+  execute: (action) => execute(action),
+  getActive: () => active,
+  noRootDeclared,
+  undoStackFor: (rootPath) => undoStackByRoot.get(rootPath),
+  taskStatus: (address) =>
+    tasks.call("task_status", { address }, { owner: LOCAL_TASK_OWNER, callId: `status_${randomBytes(8).toString("hex")}` }),
+  recordWorkActivity: (entry) => recordWorkActivity(entry),
+  json,
+});
 // THE GUARDED TABLE (voicebox-beads-cwx5.1, lib/routes/guarded.mjs): routes that DECLARE their boundary as
 // data. The dispatcher enforces each guard before its handler runs, so the checks below are named once, here,
 // and an area joins by adding its defined routes to this list — not by adding lines to handle().
 const guardedRoutes = createGuardedDispatcher({
-  routes: [...miniAppRoutes, ...agentRoutes, ...permissionRoutes],
+  routes: [...miniAppRoutes, ...agentRoutes, ...permissionRoutes, ...transportRoutes, ...commandRoutes],
   checks: {
     browserMutationRefused,
     hostTokenOk: (req) => extensions.hostTokenOk(req.headers["x-voicebox-host-token"]),
@@ -4373,9 +4394,7 @@ async function handle(req, res) {
   // /api proxy, but forwards Sec-Fetch-Site, so a hostile page via the dev front still fails here.
   // Neither header authenticates a local PROCESS: raw TCP can forge both. The opt-in loopback wall
   // above is that separate boundary; unheaded machine requests and valid host tokens still work.
-  const browserSensitive =
-    key === "POST /api/undo" ||
-    key === "POST /api/probe" || key === "GET /api/probe";
+  const browserSensitive = key === "POST /api/probe" || key === "GET /api/probe";
   if (browserSensitive && browserMutationRefused(req)) {
     return json(res, 403, {
       ok: false,
@@ -4563,137 +4582,9 @@ async function handle(req, res) {
 
   if (await workspaceRoutes(req, res, url, "read")) return;
 
-  if (req.method === "GET" && url.pathname === "/api/undo") {
-    if (!active) return json(res, 409, { ...noRootDeclared() });
-    const stack = undoStackByRoot.get(active.root.path) ?? [];
-    const last = stack.length > 0 ? stack[stack.length - 1] : null;
-    return json(res, 200, {
-      ok: true,
-      canUndo: stack.length > 0,
-      count: stack.length,
-      last: last ? { verb: last.verb, name: last.name, at: last.at } : null,
-      root: active.root,
-    });
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/undo") {
-    const result = await execute({ verb: "undo" });
-    if (!result.ok) return json(res, 400, result);
-    return json(res, 200, result);
-  }
-
   if (await guardedRoutes(req, res, url)) return;
 
   if (await workspaceRoutes(req, res, url, "write")) return;
-
-  if (req.method === "POST" && url.pathname === "/api/delegate") {
-    const body = await readJson();
-    const result = await execute({ verb: "delegate_task", agent: body?.agent, task: body?.task });
-    if (!result.ok) return json(res, 400, result);
-    return json(res, 200, result);
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/exec") {
-    const body = await readJson();
-    const command = typeof body?.command === "string" ? body.command : "";
-    const cwd = typeof body?.cwd === "string" && body.cwd.trim() ? body.cwd.trim() : undefined;
-    const result = await execute({ verb: "exec", command, ...(cwd ? { cwd } : {}) });
-    if (!result.ok) {
-      if (result.refused !== "command-refused" && result.refused !== "command-failed" && result.refused !== "command-timed-out") {
-        recordWorkActivity({
-          kind: "command",
-          summary: command ? `exec: ${command}` : "exec",
-          detail: result.why ?? result.refused ?? "Refused",
-          status: "error",
-        });
-      }
-      return json(res, 400, result);
-    }
-    return json(res, 200, result);
-  }
-
-  if (req.method === "GET" && url.pathname === "/api/transport/export") {
-    // THE HOST'S ACT, IN THE READ DIRECTION (voicebox-beads-c84e, TM-TRANSPORT-022). Export hands back the CONTENTS
-    // of every non-dot file under the declared machine root, so it is not a page read: a caller that can reach
-    // loopback can carry the whole tree away, and the mini-app relay is exactly such a caller. Import has taken the
-    // host token since voicebox-beads-3dma; export did not, so the asymmetry was one direction of the same door.
-    // The same authority applies, for the same reasons: an Origin header is a claim any local process can write on a
-    // raw socket, and the in-room session token is served openly in the page HTML, so neither distinguishes a local
-    // PROCESS from the person at the keyboard. Checked BEFORE the root is read, so a refusal says nothing about what
-    // this machine holds.
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, {
-        ok: false,
-        refused: "host-token-required",
-        why: "exporting a transport bundle reads the contents of the declared root — the host's act. It takes the host token (x-voicebox-host-token); the page cannot hold it, and a bare Origin header is a claim any local process can make.",
-      });
-    }
-    if (!active) return json(res, 400, { ...noRootDeclared(), root: null });
-    if (active.root.kind !== "machine" || !active.root.path) {
-      return json(res, 400, {
-        ok: false,
-        refused: "root-not-reachable-from-here",
-        why: `transport export from the server requires a machine root (active root kind is '${active.root.kind}')`,
-        root: active.root,
-      });
-    }
-    const rawFiles = url.searchParams.get("files");
-    const files = rawFiles ? rawFiles.split(",").map((s) => s.trim()).filter(Boolean) : null;
-    const exported = exportWorkspaceBundle(active.root.path, {
-      files,
-      sourceEnvironment: SELF_ENVIRONMENT,
-      sourceKind: "machine",
-    });
-    if (!exported.ok) return json(res, 400, { ...exported, root: active.root });
-    return json(res, 200, { ok: true, bundle: exported.bundle, root: active.root });
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/transport/import") {
-    // THE HOST'S ACT (voicebox-beads-3dma, TM-WRITE-011/TM-TRANSPORT-022). This route writes FILES INTO THE
-    // DECLARED ROOT — the machine's own tree — from a bundle the caller supplies, and it had no authority check at
-    // all: any local process that could reach loopback could import, and the bundle names its own paths, so the
-    // write was arbitrary within (and, given symlinks, in principle beyond) the root. It takes the host token,
-    // the same authority as declaring a root or booting a fence: an Origin header is a claim any local process can
-    // make, and the in-room session token is served openly in the page HTML, so neither distinguishes a local
-    // PROCESS from the person at the keyboard.
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, {
-        ok: false,
-        refused: "host-token-required",
-        why: "importing a transport bundle writes files into the declared root — the host's act. It takes the host token (x-voicebox-host-token); the page cannot hold it, and a bare Origin header is a claim any local process can make.",
-      });
-    }
-    if (!active) return json(res, 400, { ...noRootDeclared(), root: null });
-    if (active.root.kind !== "machine" || !active.root.path) {
-      return json(res, 400, {
-        ok: false,
-        refused: "root-not-reachable-from-here",
-        why: `transport import on the server requires a machine root (active root kind is '${active.root.kind}')`,
-        root: active.root,
-      });
-    }
-    const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);
-    const rawBundle = body?.bundle ?? body;
-    // OVERWRITE IS EXPLICIT, never assumed (voicebox-beads-3dma): the old `body?.overwrite !== false` meant an
-    // omitted field REPLACED existing files. Now a bundle that would clobber something is refused by name
-    // (`file-exists`) unless the caller says `overwrite: true` in so many words.
-    const imported = importWorkspaceBundle(active.root.path, rawBundle, {
-      overwrite: body?.overwrite === true,
-    });
-    if (!imported.ok) return json(res, 400, { ...imported, root: active.root });
-    return json(res, 200, { ...imported, root: active.root });
-  }
-
-  if (req.method === "GET" && url.pathname === "/api/task") {
-    const address = url.searchParams.get("address") ?? "";
-    const authority = {
-      owner: LOCAL_TASK_OWNER,
-      callId: `status_${randomBytes(8).toString("hex")}`,
-    };
-    const resStatus = tasks.call("task_status", { address }, authority);
-    if (!resStatus.ok) return json(res, 404, resStatus);
-    return json(res, 200, resStatus);
-  }
 
   if (req.method === "GET" && url.pathname === "/api/environments") {
     // The list, with each host's reachability probed NOW and its STORED capability report merged in.
