@@ -16,6 +16,7 @@ import { createAgentRoutes } from "../lib/routes/agents.mjs";
 import { createPermissionRoutes } from "../lib/routes/permissions.mjs";
 import { createTransportRoutes } from "../lib/routes/transport.mjs";
 import { createCommandRoutes } from "../lib/routes/commands.mjs";
+import { createPairingRoutes } from "../lib/routes/pairing.mjs";
 
 const noop = () => {};
 
@@ -419,4 +420,76 @@ test("commands: undo refuses a cross-origin browser, and each door hands one ver
   await refused.call("POST", "/api/exec");
   assert.equal(refused.answers[0].code, 400);
   assert.deepEqual(refused.calls.at(-1), ["activity", "exec: bad"]);
+});
+
+// ── pairing (voicebox-beads-cwx5.1) ──────────────────────────────────────────────────────────────────────────
+
+function pairingHarness({ hostToken = false, body = {} } = {}) {
+  const answers = [];
+  const calls = [];
+  const json = (_res, code, payload) => { answers.push({ code, body: payload }); };
+  const routes = createPairingRoutes({
+    mintBearer: () => "vbx_minted",
+    storeBearer: (envKey, bearer) => { calls.push(["store", envKey, bearer]); },
+    recordCallBearer: (envKey, bearer) => { calls.push(["record", envKey, bearer]); },
+    resolveEnvironment: async (envKey) => (envKey === "env_known" ? { ok: true } : { ok: false, refused: "unknown-environment" }),
+    revokePairing: (envKey) => { calls.push(["revoke", envKey]); return envKey === "env_known" ? { ok: true } : { ok: false, refused: "not-paired" }; },
+    json,
+  });
+  const dispatch = createGuardedDispatcher({
+    routes,
+    checks: { browserMutationRefused: () => false, hostTokenOk: () => hostToken, hasAuthority: () => true, hasRoomAuthority: () => true },
+    json, readJsonBody: async () => body,
+  });
+  const call = (method, pathname, search = "") => dispatch({ method }, {}, { pathname, searchParams: new URLSearchParams(search) });
+  return { routes, answers, calls, call };
+}
+
+test("pairing: every route takes the host token, and room authority is not enough", async () => {
+  const { routes } = pairingHarness();
+  assert.deepEqual(
+    routes.map((r) => [r.key, r.guard, r.body ?? null, r.refusal?.refused ?? null]),
+    [
+      ["POST /api/pair", "host-token", "json", "host-token-required"],
+      ["POST /api/pair/complete", "host-token", "json", "host-token-required"],
+      ["DELETE /api/pair", "host-token", "json", "host-token-required"],
+    ],
+  );
+  // hasAuthority and hasRoomAuthority both say yes in this harness: a page still cannot mint or revoke.
+  const page = pairingHarness({ hostToken: false, body: { envKey: "env_known", bearer: "vbx_x" } });
+  await page.call("POST", "/api/pair");
+  await page.call("POST", "/api/pair/complete");
+  await page.call("DELETE", "/api/pair");
+  assert.deepEqual(page.answers.map((a) => [a.code, a.body.refused]), Array(3).fill([403, "host-token-required"]));
+  assert.deepEqual(page.calls, [], "a refused caller creates, records and revokes nothing");
+  for (const answer of page.answers) assert.equal(JSON.stringify(answer.body).includes("vbx_"), false, "a refusal never carries a bearer");
+});
+
+test("pairing: the host mints, records and revokes, and each refusal is named", async () => {
+  const host = pairingHarness({ hostToken: true, body: { envKey: "env_known", bearer: "vbx_theirs" } });
+  await host.call("POST", "/api/pair");
+  await host.call("POST", "/api/pair/complete");
+  await host.call("DELETE", "/api/pair");
+  assert.deepEqual(host.answers.map((a) => a.code), [200, 200, 200]);
+  assert.deepEqual(host.answers[0].body, { ok: true, envKey: "env_known", bearer: "vbx_minted" });
+  assert.deepEqual(host.calls, [["store", "env_known", "vbx_minted"], ["record", "env_known", "vbx_theirs"], ["revoke", "env_known"]]);
+
+  const empty = pairingHarness({ hostToken: true, body: {} });
+  await empty.call("POST", "/api/pair");
+  await empty.call("POST", "/api/pair/complete");
+  await empty.call("DELETE", "/api/pair");
+  await empty.call("DELETE", "/api/pair", "envKey=env_other");
+  assert.deepEqual(empty.answers.map((a) => [a.code, a.body.refused]), [[400, "bad-request"], [400, "bad-request"], [400, "bad-request"], [404, "not-paired"]]);
+  assert.deepEqual(empty.calls, [["revoke", "env_other"]], "the key may ride the query string");
+
+  // An EMPTY body key is a bad request; it must not fall through to the query string and revoke that instead.
+  const emptyKey = pairingHarness({ hostToken: true, body: { envKey: "" } });
+  await emptyKey.call("DELETE", "/api/pair", "envKey=env_known");
+  assert.deepEqual([emptyKey.answers[0].code, emptyKey.answers[0].body.refused], [400, "bad-request"]);
+  assert.deepEqual(emptyKey.calls, [], "nothing is revoked");
+
+  const unknown = pairingHarness({ hostToken: true, body: { envKey: "env_nope", bearer: "vbx_theirs" } });
+  await unknown.call("POST", "/api/pair/complete");
+  assert.deepEqual([unknown.answers[0].code, unknown.answers[0].body.refused], [404, "unknown-environment"]);
+  assert.deepEqual(unknown.calls, [], "a bearer for an unknown environment is not recorded");
 });

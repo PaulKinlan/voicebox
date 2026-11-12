@@ -34,6 +34,7 @@ import { createAgentRoutes } from "./lib/routes/agents.mjs";
 import { createPermissionRoutes } from "./lib/routes/permissions.mjs";
 import { createTransportRoutes } from "./lib/routes/transport.mjs";
 import { createCommandRoutes } from "./lib/routes/commands.mjs";
+import { createPairingRoutes } from "./lib/routes/pairing.mjs";
 import { createGuardedDispatcher } from "./lib/routes/guarded.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
@@ -4322,11 +4323,19 @@ const commandRoutes = createCommandRoutes({
   recordWorkActivity: (entry) => recordWorkActivity(entry),
   json,
 });
+const pairingRoutes = createPairingRoutes({
+  mintBearer: () => `vbx_${randomBytes(24).toString("hex")}`,
+  storeBearer,
+  recordCallBearer,
+  resolveEnvironment,
+  revokePairing,
+  json,
+});
 // THE GUARDED TABLE (voicebox-beads-cwx5.1, lib/routes/guarded.mjs): routes that DECLARE their boundary as
 // data. The dispatcher enforces each guard before its handler runs, so the checks below are named once, here,
 // and an area joins by adding its defined routes to this list — not by adding lines to handle().
 const guardedRoutes = createGuardedDispatcher({
-  routes: [...miniAppRoutes, ...agentRoutes, ...permissionRoutes, ...transportRoutes, ...commandRoutes],
+  routes: [...miniAppRoutes, ...agentRoutes, ...permissionRoutes, ...transportRoutes, ...commandRoutes, ...pairingRoutes],
   checks: {
     browserMutationRefused,
     hostTokenOk: (req) => extensions.hostTokenOk(req.headers["x-voicebox-host-token"]),
@@ -4797,40 +4806,6 @@ async function handle(req, res) {
   // bearer on BOTH sides (0600, outside any project root, served by no route). A call to an unpaired
   // or unreachable environment is refused BY NAME. THE DRIVEN CASE IS THE REMOTE ONE — two real
   // servers — because local success is what hid the firewall failure all evening.
-  if (req.method === "POST" && url.pathname === "/api/pair") {
-    // The REMOTE side: accept a pairing request and issue a bearer bound to THIS environment's key.
-    // PAIRING CREATES A CREDENTIAL — the same authority class as admission, so the same gate: the
-    // host token. The token is checked, never logged, and never echoed in a refusal's `why`.
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "pairing creates a credential — it is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it" });
-    }
-    const body = await readJson();
-    const envKey = body?.envKey;
-    if (typeof envKey !== "string" || !envKey) {
-      return json(res, 400, { ok: false, refused: "bad-request", why: "pairing names the environment key it asks to pair with" });
-    }
-    const bearer = `vbx_${randomBytes(24).toString("hex")}`;
-    storeBearer(envKey, bearer); // this host's side: the bearer it will accept
-    return json(res, 200, { ok: true, envKey, bearer });
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/pair/complete") {
-    // The LOCAL side of pairing: the person confirmed, the remote issued a bearer, and this host
-    // records the bearer it will use when calling that environment. The page is never given it —
-    // and this act is gated too, because it registers a credential on the host.
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "pairing creates a credential — it is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it" });
-    }
-    const body = await readJson();
-    const envKey = typeof body?.envKey === "string" ? body.envKey : null;
-    const bearer = typeof body?.bearer === "string" ? body.bearer : null;
-    if (!envKey || !bearer) return json(res, 400, { ok: false, refused: "bad-request", why: "pairing completion carries the environment key and the bearer it issued" });
-    const target = await resolveEnvironment(envKey);
-    if (!target.ok) return json(res, 404, target);
-    recordCallBearer(envKey, bearer);
-    return json(res, 200, { ok: true, envKey, paired: true });
-  }
-
   // DELETE /api/environments/<key> (voicebox-beads-4kp, voicebox-beads-36ul): stop what you minted
   // or remove a declared environment from the registry. Authorized via host token or room session.
   const envDelete = url.pathname.match(/^\/api\/environments\/([^/]+)$/);
@@ -4886,20 +4861,6 @@ async function handle(req, res) {
       return json(res, result.status, result.body);
     }
     return json(res, 405, { ok: false, refused: "bad-request", why: `/api/environments/<key>/${surface} does not answer ${req.method}` });
-  }
-
-  if (req.method === "DELETE" && url.pathname === "/api/pair") {
-    // Revoking pairing is the HOST's act (voicebox-beads-yo1): requires host token
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "revoking a pairing is the host's act and requires the host token (x-voicebox-host-token); the page cannot hold it" });
-    }
-    const body = await readJson().catch((err) => { if (err instanceof BodyRefusal) throw err; return {}; });
-    const envKey = (typeof body?.envKey === "string" ? body.envKey : null) ?? url.searchParams.get("envKey");
-    if (!envKey) {
-      return json(res, 400, { ok: false, refused: "bad-request", why: "revoking a pairing names the environment key (envKey)" });
-    }
-    const result = revokePairing(envKey);
-    return json(res, result.ok ? 200 : 404, result);
   }
 
   if (req.method === "POST" && url.pathname === "/api/bootstrap") {

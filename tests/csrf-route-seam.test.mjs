@@ -62,8 +62,6 @@ const decisions = new Map([
   ["POST /api/probe", "csrf"],
   ["POST /api/environments", "json"],
   ["POST /api/turn", "json"],
-  ["POST /api/pair", "json"],
-  ["POST /api/pair/complete", "json"],
   ["POST /api/bootstrap", "host-token"],
   ["POST /api/call", "json"],
   ["POST /api/execute", "json"],
@@ -74,7 +72,6 @@ const decisions = new Map([
   ["PUT /api/keys", "json"],
   ["PUT /api/agent-settings", "json"],
   ["DELETE /api/root", "host-token"],
-  ["DELETE /api/pair", "host-token"],
   ["DELETE /api/environments/<param>", "authority"],
 ]);
 
@@ -595,10 +592,10 @@ test("a non-POST decision is checked against its handler, and an unused one is r
     /DELETE \/api\/environments\/<param>: declared authority but handler no longer calls its boundary/,
   );
 
-  // DELETE /api/pair stands in for DELETE /api/mini-apps, which moved to lib/routes/mini-apps.mjs (voicebox-beads-cwx5.1).
-  const goneDelete = source.replace('if (req.method === "DELETE" && url.pathname === "/api/pair") {', 'if (false) {');
-  assert.notEqual(goneDelete, source, "the DELETE /api/pair handler must still be where this test removes it");
-  assert.throws(() => assertPostBoundary(goneDelete), /DELETE \/api\/pair: obsolete host-token decision/);
+  // DELETE /api/root stands in for DELETE /api/pair, which moved to lib/routes/pairing.mjs (voicebox-beads-cwx5.1).
+  const goneDelete = source.replace('  "DELETE /api/root": (req, res, url) => {', '  "GET /api/root-gone": (req, res, url) => {');
+  assert.notEqual(goneDelete, source, "the DELETE /api/root handler must still be where this test removes it");
+  assert.throws(() => assertPostBoundary(goneDelete), /DELETE \/api\/root: obsolete host-token decision/);
 
   // The other control arm: a new READ verb stays out of the mutation inventory, so the widening did not turn every
   // route into a decision.

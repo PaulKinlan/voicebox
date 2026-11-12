@@ -298,6 +298,7 @@ AudioWorklet modules loaded by the frontend audio engine: `pcm-worklet.js`.
 | `lib/routes/guarded.mjs` | Declared-guard route table: each route states its boundary as data and one dispatcher enforces it. |
 | `lib/routes/harnesses.mjs` | Harness inventory and configuration HTTP endpoints. |
 | `lib/routes/mini-apps.mjs` | Mini-App shelf and Web MCP tool-registration HTTP endpoints (/api/mini-apps, /api/mini-app/tools). |
+| `lib/routes/pairing.mjs` | Pairing between environments: issue, record and revoke the bearer one host uses to call another (POST /api/pair, POST /api/pair/complete, DELETE /api/pair), all the host's act. |
 | `lib/routes/permissions.mjs` | Pending permission requests and their resolution (GET /api/permissions/pending, POST /api/permissions/resolve). |
 | `lib/routes/presence.mjs` | Multi-participant room presence and floor control endpoints. |
 | `lib/routes/tool-catalog.mjs` | Tool catalog HTTP query endpoint (GET /api/tools). |
