@@ -25,6 +25,8 @@
 // the page leaves the marker empty and this line stays blank: naming a revision
 // the server never sent is the lie this whole line exists to prevent.
 
+import { isDebugEnabled } from "../debug-transcript.js";
+
 // ── the page's own build stamp (read from the served meta tag) ─────────────
 export function pageBuild() {
   const content = document.querySelector('meta[name="voicebox-build"]')?.getAttribute("content") ?? "";
@@ -69,7 +71,7 @@ export function createSyncToastController({ els, on, openChangelogDialog }) {
   });
 
   function stampBuild(server) {
-    const line = document.getElementById("build");
+    let line = document.getElementById("build");
     const page = pageBuild();
     const sha = (text) => (text.match(/@\s*([0-9a-f]{7,40})/) ?? [])[1] ?? null;
     const pageSha = sha(page);
@@ -103,6 +105,13 @@ export function createSyncToastController({ els, on, openChangelogDialog }) {
     const repo = "https://github.com/PaulKinlan/voicebox";
 
     line.replaceChildren();
+    // The revisions are developer diagnostics (voicebox-beads-cwx5.7): they are always written, so a test or
+    // a bug report can read them, and SHOWN only when they are news (the page and server disagree) or when
+    // the person turned debugging on. The change log link stays visible either way.
+    const detail = document.createElement("span");
+    detail.className = "build-detail";
+    const realLine = line;
+    line = detail;
 
     const addSep = () => line.append(document.createTextNode(" · "));
 
@@ -152,6 +161,11 @@ export function createSyncToastController({ els, on, openChangelogDialog }) {
     }
 
     if (hasPrev) addSep();
+    line = realLine;
+    line.append(detail);
+    let wantsDetail = false;
+    try { wantsDetail = isDebugEnabled(); } catch {}
+    line.dataset.detail = String(mismatch || wantsDetail);
     const clLink = document.createElement("a");
     clLink.href = "#changelog-dialog";
     clLink.textContent = "change log";

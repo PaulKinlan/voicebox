@@ -35,6 +35,7 @@ import { createPermissionRoutes } from "./lib/routes/permissions.mjs";
 import { createTransportRoutes } from "./lib/routes/transport.mjs";
 import { createCommandRoutes } from "./lib/routes/commands.mjs";
 import { createPairingRoutes } from "./lib/routes/pairing.mjs";
+import { createHostGate, parseAllowedHosts } from "./lib/request-host.mjs";
 import { createGuardedDispatcher } from "./lib/routes/guarded.mjs";
 import { ROOT_FACTS, ROOT_NOT_DECLARED, describeRoot, noRootDeclared, reachableFrom, reachableFromEnvironment, rootVanished } from "./core/root.ts";
 import { normaliseRelativeDir, parentDir } from "./core/paths.ts";
@@ -469,6 +470,13 @@ function bootstrapUrlOn(origin) {
 // Only the two :5173 fronts are answered for, because those are the hosts the startup text names a
 // ticket for; anywhere else the clause says nothing rather than naming a remedy it cannot describe.
 const DEV_FRONT_ORIGINS = new Set([DEV_FRONT_ORIGIN, DEV_FRONT_ALIAS_ORIGIN]);
+// THE HOST ALLOWLIST (lib/request-host.mjs): the boundary against a website that rebinds its DNS to loopback.
+// Checked first in handle() and in the upgrade handler, before any route, wall or door.
+const ALLOWED_HOSTS = parseAllowedHosts(process.env.VOICEBOX_ALLOWED_HOSTS);
+if (ALLOWED_HOSTS.refused.length) {
+  console.warn(`[voicebox] VOICEBOX_ALLOWED_HOSTS: ignored ${ALLOWED_HOSTS.refused.map((entry) => JSON.stringify(entry)).join(", ")} — each entry is host[:port]`);
+}
+const hostGate = createHostGate({ extraHosts: ALLOWED_HOSTS.hosts });
 function frontOfRequest(req) {
   const host = req.headers.host;
   return typeof host === "string" && host ? `http://${host}` : null;
@@ -1975,6 +1983,7 @@ CHOICES — these are BOOT decisions, not settings for a running session
 NETWORK
 `);
   line("PORT", "8787", "the API and static host");
+  line("VOICEBOX_ALLOWED_HOSTS", "(none)", "extra host[:port] names this server answers to (tunnel, Tailscale)");
   line("VOICEBOX_HELLO_BOUND_MS", "(default)", "entitlement handshake bound");
   line("VOICEBOX_BIND_DEADLINE_MS", "(default)", "port-bind deadline");
   line("VOICEBOX_BIND_RETRY_MS", "(default)", "port-bind retry interval");
@@ -2089,6 +2098,7 @@ OTHER VARIABLES
   VOICEBOX_HARNESS            task harness (pi)
   VOICEBOX_EXTENSIONS_DIR     where extensions live      default <repo>/extensions
   VOICEBOX_SANDBOX_HOMES      sandbox home root
+  VOICEBOX_ALLOWED_HOSTS      extra host[:port] names to answer to (tunnel, Tailscale); loopback is always allowed
   VOICEBOX_HELLO_BOUND_MS     entitlement handshake bound
   VOICEBOX_BIND_DEADLINE_MS   port-bind deadline
   VOICEBOX_BIND_RETRY_MS      port-bind retry interval
@@ -4355,6 +4365,8 @@ const extensionRoutes = createExtensionRoutes({
 });
 
 async function handle(req, res) {
+  // FIRST, before the URL is parsed or any route is named: is this request addressed to US? (lib/request-host.mjs)
+  if (!hostGate.allowed(req.headers.host)) return json(res, 403, hostGate.refusal());
   // The bounded JSON door lives at module scope (readJsonBody, voicebox-beads-d808) so the routes
   // table uses it too; this closure keeps the ~25 inline call sites spelling it `readJson(...)`.
   const readJson = (maxBytes) => readJsonBody(req, res, maxBytes);
@@ -5020,6 +5032,19 @@ server.on("upgrade", (req, socket) => {
       // fallback so an uncooperative peer cannot retain the socket — the retention this fixes
       // (review nit, voicebox-beads-kckr).
       socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n", close);
+      const fallback = setTimeout(close, 500);
+      fallback.unref?.();
+    } catch {
+      close();
+    }
+    return;
+  }
+  // The same Host allowlist as handle() (lib/request-host.mjs): a WebSocket is not bound by CORS at all, so a
+  // rebinding page could otherwise open /live or /channel directly. Refused on the raw socket and closed.
+  if (!hostGate.allowed(req.headers.host)) {
+    const close = () => { try { socket.destroy(); } catch { /* already gone */ } };
+    try {
+      socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n", close);
       const fallback = setTimeout(close, 500);
       fallback.unref?.();
     } catch {

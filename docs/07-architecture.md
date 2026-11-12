@@ -172,6 +172,7 @@ Environment variables read by the server and runtime libraries:
 | `PORT` | `server.mjs` | HTTP server port bound on `127.0.0.1` (default `8787`). |
 | `VOICEBOX_ACP_ADAPTER` | `lib/pi-acp.mjs` | Path or command override for the `pi-acp` stdio adapter binary in `lib/pi-acp.mjs`. |
 | `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | Path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs`. |
+| `VOICEBOX_ALLOWED_HOSTS` | `server.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | Maximum duration in milliseconds to retry binding the server port before failing. |
 | `VOICEBOX_BIND_RETRY_MS` | `server.mjs` | Interval in milliseconds between port bind retries at startup. |
 | `VOICEBOX_CLAUDE_CLI` | `lib/claude-acp.mjs` | Path override for the Claude Code CLI executable (`CLAUDE_CODE_EXECUTABLE`) used by `lib/claude-acp.mjs`. |
