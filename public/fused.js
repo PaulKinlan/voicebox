@@ -14,7 +14,6 @@ import { initExtensionsUI, renderExtensions } from "./extensions-ui.mjs";
 import { initSettingsUi } from "./settings-ui.mjs";
 import { createBoundedSeenSet, encodeVisionFrame } from "./vision-frame-encoder.mjs";
 import { drawInputWave, drawOutputRing, meterLevel, mixSpeechAndMic } from "./audio-meters.mjs";
-import { createOfflineSpeechController } from "./offline-speech-client.mjs";
 import { createPresenceUIController } from "./presence-ui.mjs";
 import { createVisionGroundingController } from "./vision-grounding.mjs";
 import { initChangelogDialog } from "./components/changelog-dialog.mjs";
@@ -149,7 +148,6 @@ const WANTED = {
   visionCoreMeta: "vision-core-meta", visionSnapshotBtn: "vision-snapshot-btn", visionStopBtn: "vision-stop-btn",
   settingPttEnabled: "setting-ptt-enabled", settingPttState: "setting-ptt-state",
   settingDebugEnabled: "setting-debug-enabled", settingDebugState: "setting-debug-state",
-  settingOfflineSpeechEnabled: "setting-offline-speech-enabled", settingOfflineSpeechState: "setting-offline-speech-state",
   settingVisionResolution: "setting-vision-resolution", settingVisionFps: "setting-vision-fps",
   settingThinkingLevel: "setting-thinking-level", settingThinkingLevelState: "setting-thinking-level-state",
   settingStartCamera: "setting-start-camera", settingStartScreen: "setting-start-screen",
@@ -2573,9 +2571,6 @@ function finish(said, outcome, tone) {
     label: tone === "bad" ? "Refusal" : "Turn",
     summary: said ? `“${said}” → ${outcome}` : outcome,
   });
-  if (window.__voiceboxOfflineSpeech?.isFallbackActive?.() && outcome) {
-    window.__voiceboxOfflineSpeech.speak(outcome);
-  }
 }
 
 /**
@@ -2880,63 +2875,6 @@ async function send(said) {
   }
 }
 
-// ── Offline Speech Fallback (voicebox-beads-ijtf) ─────────────────────────
-const offlineSpeechController = createOfflineSpeechController({
-  onTranscript: (transcript, { isFinal } = {}) => {
-    if (transcript) {
-      if (els.utterance) {
-        if (els.form?.hidden) els.form.hidden = false;
-        els.utterance.value = transcript;
-        if (els.send) els.send.disabled = !transcript.trim();
-      }
-      if (isFinal) {
-        setState("Heard it — sending your turn…");
-        void send(transcript);
-      }
-    }
-  },
-  onStateChange: (vState) => {
-    if (vState === "listening") {
-      listening(true);
-      setState("Listening offline — speak your turn, then pause.");
-    } else if (vState === "speaking") {
-      setState("Assistant speaking (offline speech synthesis)…");
-    } else {
-      listening(false);
-    }
-  },
-});
-
-let offlineFallbackActive = false;
-let offlineFallbackEnabled = true;
-
-window.__voiceboxOfflineSpeech = {
-  controller: offlineSpeechController,
-  isEnabled: () => offlineFallbackEnabled,
-  setEnabled: (val) => {
-    offlineFallbackEnabled = Boolean(val);
-    if (!offlineFallbackEnabled && offlineFallbackActive) {
-      offlineSpeechController.stopListening();
-      offlineSpeechController.stopSpeaking();
-      offlineFallbackActive = false;
-    }
-  },
-  isFallbackActive: () => offlineFallbackActive,
-  activateFallback: () => {
-    offlineFallbackActive = true;
-    setState("Live cloud voice unavailable — switched to on-device speech fallback.", "warn");
-  },
-  deactivateFallback: () => {
-    offlineFallbackActive = false;
-    offlineSpeechController.stopListening();
-    offlineSpeechController.stopSpeaking();
-  },
-  speak: (text, opts) => offlineSpeechController.speak(text, opts),
-  startListening: (opts) => offlineSpeechController.startListening(opts),
-  stopListening: () => offlineSpeechController.stopListening(),
-  stopSpeaking: () => offlineSpeechController.stopSpeaking(),
-};
-
 // ── the microphone: the browser's dictation, and nothing more ─────────────
 let recognition = null;
 
@@ -2946,13 +2884,6 @@ function listening(on) {
 }
 
 function startListening() {
-  if (window.__voiceboxOfflineSpeech?.isFallbackActive?.()) {
-    const res = window.__voiceboxOfflineSpeech.startListening();
-    if (!res?.ok) {
-      setState("No speech recognition in this browser — type your turn below.", "warn");
-    }
-    return;
-  }
   // live-voice.js owns the microphone when it is on the page: dictation and a
   // live session must never both answer one click (module order is not a
   // guarantee, so this is checked at click time, not at attach time).
@@ -3941,24 +3872,6 @@ function sqehWire() {
           : "Standard error reporting";
       }
       console.log(checked ? "[voicebox] Debug logging enabled" : "[voicebox] Debug logging disabled");
-    });
-  }
-  if (els.settingOfflineSpeechEnabled) {
-    const isOfflineEnabled = window.__voiceboxOfflineSpeech?.isEnabled?.() ?? true;
-    els.settingOfflineSpeechEnabled.checked = isOfflineEnabled;
-    if (els.settingOfflineSpeechState) {
-      els.settingOfflineSpeechState.textContent = isOfflineEnabled
-        ? "Automatic — falls back to browser voice when cloud is unavailable"
-        : "Disabled — cloud voice only";
-    }
-    els.settingOfflineSpeechEnabled.addEventListener("change", () => {
-      const checked = Boolean(els.settingOfflineSpeechEnabled.checked);
-      window.__voiceboxOfflineSpeech?.setEnabled(checked);
-      if (els.settingOfflineSpeechState) {
-        els.settingOfflineSpeechState.textContent = checked
-          ? "Automatic — falls back to browser voice when cloud is unavailable"
-          : "Disabled — cloud voice only";
-      }
     });
   }
   els.settingsRunDoctor?.addEventListener("click", async () => {

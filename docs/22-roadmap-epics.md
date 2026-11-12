@@ -12,7 +12,7 @@ Each epic is tracked in Beads (`bd`) as an `epic` issue with clear module bounda
 |---|---|---|---|---|---|
 | **Epic 1** | `voicebox-beads-jagv` | **Multi-Participant Shared Voice Rooms & Live Presence ("Here, Together")** | `docs/archive/00-brief.md`, `docs/archive/interface.md` | `lib/room-presence.mjs`, `server.mjs`, `core/shared-log.ts`, `lib/channel.mjs`, `public/fused.js` | `P2` |
 | **Epic 2** | `voicebox-beads-2pfb` | **Visual Branch & Worktree Landing Inspector ("Waiting to Land")** | `docs/archive/00-brief.md`, `docs/archive/interface.md` | **lib/branch-landing.mjs**, **public/apps/landing-inspector.html**, `server.mjs`, `lib/git-env.mjs` | `P1` |
-| **Epic 3** | `voicebox-beads-1r99` | **Local Offline Speech-to-Text & TTS Fallback (Whisper / Piper)** | `docs/archive/00-brief.md`, `docs/07-architecture.md` | **lib/offline-speech.mjs**, **public/offline-speech-client.mjs**, `lib/live-session.mjs`, `public/live-voice.js` | `P2` |
+| **Epic 3** | `voicebox-beads-1r99` | ~~Local Offline Speech-to-Text & TTS Fallback (Whisper / Piper)~~ **Withdrawn** | — | Removed | — |
 | **Epic 4** | `voicebox-beads-80bd` | **Multi-Harness Result Comparison & Automated Diff Synthesis** | Multi-harness architecture (`lib/tasks.mjs`) | **lib/harness-comparison.mjs**, `public/apps/agent-monitor.html`, `lib/tasks.mjs` | `P1` |
 | **Epic 5** | `voicebox-beads-kpp6` | **Native OS Companion / Global Hotkey & System Tray Bridge** | `docs/archive/00-brief.md` ("stay in the conversation while doing something else") | **lib/os-companion.mjs**, **scripts/voicebox-companion.mjs**, `public/pip-mic.mjs` | `P3` |
 | **Epic 6** | `voicebox-beads-3l0w` | **Wasm Execution Cell Concurrency Semaphore & WASI Preview2 Capability Grants** | `docs/20-webassembly-tools.md`, `docs/archive/02-environment.md` | `lib/wasm-shelf.mjs`, `lib/wasm-worker.mjs`, `core/extensions.ts` | `P2` |
@@ -50,16 +50,9 @@ In `docs/archive/00-brief.md` and `docs/archive/interface.md`, Voicebox specifie
 
 ---
 
-## Epic 3 — Local Offline Speech-to-Text & TTS Fallback (Whisper / Piper) (`voicebox-beads-1r99`)
+## Epic 3 — Local Offline Speech-to-Text & TTS Fallback (`voicebox-beads-1r99`) — withdrawn
 
-### Context & Architecture
-When cloud voice provider credentials (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) are unconfigured or the machine is offline, `/live` enters `standby` mode and falls back to local on-device speech recognition and synthesis so the room remains conversational without cloud connectivity.
-
-### Landed Implementation (**lib/offline-speech.mjs**, **public/offline-speech-client.mjs**, `lib/live-session.mjs`, `public/live-voice.js`)
-1. **Local Whisper / Piper Speech Engine (**lib/offline-speech.mjs**)**:
-   - Probes local Whisper (`whisper-cli` / `whisper-cpp`) and Piper (`piper`) or OS TTS (`say` / `espeak-ng`) binaries, transcribes 16 kHz PCM audio locally, and synthesizes spoken responses with zero cloud dependencies.
-2. **Client Offline Voice Fallback (**public/offline-speech-client.mjs**, `public/live-voice.js`)**:
-   - Transitions seamlessly between cloud realtime models and local offline STT/TTS when network connectivity drops or when local offline voice mode is selected.
+This epic was withdrawn and its code removed. It assumed that local speech recognition and synthesis could stand in for the live model when the cloud was unreachable. They cannot: a Voicebox turn is answered by an agent working with a live model, which hears, reasons and speaks in one session. Speech-to-text and text-to-speech on their own have nothing to send a turn to, so a "fallback" built from them only looked like a working room. When live voice is unavailable, the page says so and the typed text path stays open.
 
 ---
 
