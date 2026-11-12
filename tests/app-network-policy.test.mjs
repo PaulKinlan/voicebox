@@ -165,3 +165,17 @@ test("the host's own origin is a resource source for built-in apps and never a c
     assert.equal(buildAppCsp(undefined, { hostOrigin: bad }), buildAppCsp(), `'${bad}' must not widen the policy`);
   }
 });
+
+test("only a standard doctype behind HTML whitespace is kept; every other opening gets the policy in front of it", () => {
+  const meta = '<meta http-equiv="Content-Security-Policy"';
+  for (const kept of ["<!doctype html>", "\n\t <!DOCTYPE  html >", "\r\n\f<!doctype html>"]) {
+    const out = applyNetworkPolicy(`${kept}<p>x</p>`);
+    assert.ok(out.startsWith(`${kept}\n${meta}`), `the app's own standard doctype stays first: ${JSON.stringify(kept)}`);
+  }
+  // A no-break space, a BOM and a vertical tab are whitespace to JavaScript's \s and CONTENT to the HTML parser.
+  for (const lead of [" ", "﻿", "\u000b", " ", "x", '<!DOCTYPE html PUBLIC "x>y">', "<!doctype html SYSTEM 'about:legacy-compat'>", "<!doctypehtml>"]) {
+    const out = applyNetworkPolicy(`${lead}<!doctype html><script src="https://elsewhere.example/x.js"></script>`);
+    assert.ok(out.startsWith(`<!doctype html>\n${meta}`), `the policy must come before ${JSON.stringify(lead)}`);
+    assert.ok(out.indexOf(meta) < out.indexOf("elsewhere.example"));
+  }
+});

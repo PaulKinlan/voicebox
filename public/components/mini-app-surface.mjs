@@ -82,6 +82,16 @@ export function initMiniAppHost({
   const network = createMiniAppNetwork({ getHost: () => els.miniAppViewport || els.miniAppContainer });
   // What the mounted app last said its state is, and how many messages it may still send this minute. Both
   // belong to ONE mount: a remount or a different app starts with neither.
+  // WHO A NETWORK APPROVAL BELONGS TO (PR #40 review). The card's `appId` is a DISPLAY identity: mount() collapses
+  // an incoming app onto an existing entry that shares its title, file name or slug. An approval keyed on that
+  // would pass from the app a person approved to a different one that borrowed its title. So the approval is
+  // keyed on where the incoming app came from and what it calls itself, computed BEFORE the collapse, and
+  // remembered against the mounted entry so a reload or the Allow remount of that same entry keeps it.
+  const networkIds = new WeakMap();
+  const networkIdOf = (descriptor, normKey) => networkIds.get(descriptor) ?? [
+    descriptor.sandbox ? `env:${descriptor.sandbox}` : String(descriptor.source || "workspace"),
+    String(descriptor.appId || descriptor.fileName || normKey || "").toLowerCase(),
+  ].join("|");
   let appContext = "";
   let appMessageBudget = createMessageBudget();
 
@@ -546,6 +556,7 @@ export function initMiniAppHost({
       }
     }
 
+    const networkId = networkIdOf(descriptor, normKey);
     const appId = existingKey || descriptor.appId || normKey || `app_${Date.now().toString(36)}`;
     if (existingKey && existingKey !== appId) {
       launchedMiniApps.delete(existingKey);
@@ -559,6 +570,7 @@ export function initMiniAppHost({
       fileName: derivedFileName,
       html: descriptor.html,
     };
+    networkIds.set(merged, networkId);
     currentDescriptor = merged;
     launchedMiniApps.set(appId, merged);
 
@@ -593,7 +605,7 @@ export function initMiniAppHost({
 
     const bridgeUrl = `/mini-app-bridge.html?appId=${encodeURIComponent(appId)}`;
     // What the app may reach: nothing, unless it declares origins and a person approved exactly that set.
-    const access = network.grantFor(appId, descriptor.html);
+    const access = network.grantFor(networkId, descriptor.html);
 
     // A remount replaces the app the question was about, so the question goes with it.
     if (pendingHostAction) pendingHostAction.finish(false, "the mini-app was remounted before a person answered");
@@ -641,7 +653,7 @@ export function initMiniAppHost({
     if (els.miniAppViewport) els.miniAppViewport.replaceChildren(outer);
     // Asked AFTER the frame is in place: the app is already running offline, and the bar sits above it.
     if (access.request.declared && !access.approved && !access.declined) {
-      network.ask({ appId, title, request: access.request, onAllow: () => { if (currentDescriptor?.appId === appId) mount(currentDescriptor); } });
+      network.ask({ appId: networkId, title, request: access.request, onAllow: () => { if (currentDescriptor === merged) mount(merged); } });
     }
     network.problems(access.request.problems);
     sqehSyncMiniApps();

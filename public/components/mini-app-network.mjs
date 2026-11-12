@@ -31,6 +31,9 @@ export function createMiniAppNetwork({ getHost, storage = globalThis.localStorag
   let declarationProblems = [];
   // "Keep offline" lasts for this page: asking again on every reload of the same app would train the click.
   const declinedThisSession = new Set();
+  // An Allow the browser could not store (quota, storage disabled) still stands for this page: the person
+  // answered, and dropping the answer would restart the app offline and ask again on every click.
+  const approvedThisSession = new Set();
 
   function readApprovals() {
     try {
@@ -51,7 +54,7 @@ export function createMiniAppNetwork({ getHost, storage = globalThis.localStorag
   function grantFor(appId, html) {
     const request = readAppNetworkRequest(html);
     const key = networkRequestKey(request);
-    const approved = request.declared && readApprovals()[appId] === key;
+    const approved = request.declared && (readApprovals()[appId] === key || approvedThisSession.has(`${appId}|${key}`));
     return {
       request,
       approved,
@@ -99,7 +102,7 @@ export function createMiniAppNetwork({ getHost, storage = globalThis.localStorag
     host.prepend(bar);
     const key = networkRequestKey(request);
     allow.addEventListener("click", () => {
-      writeApproval(appId, key);
+      if (!writeApproval(appId, key)) approvedThisSession.add(`${appId}|${key}`);
       declinedThisSession.delete(`${appId}|${key}`);
       bar?.remove?.(); bar = null;
       onAllow?.();

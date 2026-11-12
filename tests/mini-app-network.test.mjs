@@ -88,11 +88,11 @@ test("a Mini-App reaches the network only through origins it declared and a pers
       .filter((e) => e.timestamp > mark && !stopped.has(e.requestId))
       .map((e) => String(e.request?.url ?? "")).filter((url) => url.includes("vb-example.test")).map((url) => new URL(url).host).sort();
   };
-  const mount = async (appId, html) => {
+  const mount = async (appId, html, title = appId) => {
     // Let the previous app's requests finish being announced before drawing the line.
     await sleep(600);
     mark = now();
-    await page.evaluate((d) => { window.__voiceboxOnMiniApp(d); }, { appId, title: appId, html });
+    await page.evaluate((d) => { window.__voiceboxOnMiniApp(d); }, { appId, title, html });
   };
   const cardText = (selector) => page.evaluate((s) => document.querySelector(s)?.textContent ?? "", selector);
 
@@ -149,4 +149,27 @@ test("a Mini-App reaches the network only through origins it declared and a pers
   // Another app with the same declaration has its own answer to give.
   await mount("other-app", declaringApp(DECLARED));
   await page.waitFor(() => !!document.querySelector(".mini-app-network-ask"), { label: "a different app is asked for itself", timeout: 15000 });
+
+  // ── 5. an approval belongs to the app that was approved, not to its TITLE (PR #40 review) ──────────
+  // The card collapses apps that share a title onto one entry. A different app that borrows the approved
+  // app's title and declares the same origins must still be asked, and must stay offline until answered.
+  await mount("impostor", declaringApp(DECLARED), "net-app");
+  await page.waitFor(() => !!document.querySelector(".mini-app-network-ask"), { label: "an app borrowing an approved title is asked for itself", timeout: 15000 });
+  await sleep(300);
+  assert.deepEqual(outside(), [], "a borrowed title must not carry another app's network approval");
+  // …and the app that WAS approved still is, mounted again under its own id.
+  await mount("net-app", declaringApp(DECLARED));
+  const still = Date.now() + 15000;
+  while (reached().length < 2 && Date.now() < still) await sleep(50);
+  assert.deepEqual(reached(), ["api.vb-example.test", "cdn.vb-example.test"], "the approved app keeps its approval");
+
+  // ── 6. the policy is first even when the document does not start the way a doctype regex expects ───
+  // A no-break space is whitespace to JavaScript and CONTENT to the HTML parser: it opens <body>, and a
+  // policy placed after the doctype that follows would sit in the body, where a meta CSP does nothing.
+  for (const [name, lead] of [["nbsp-lead", "\u00a0"], ["bom-lead", "\ufeff\u00a0"], ["legacy-doctype", '<!DOCTYPE html PUBLIC "x>y">']]) {
+    await mount(name, lead + undeclaredApp);
+    await page.waitFor(() => (document.querySelector(".mini-app-network-notice")?.textContent ?? "").includes("undeclared.vb-example.test"), { label: `the blocked-load notice for ${name}`, timeout: 15000 });
+    await sleep(300);
+    assert.deepEqual(outside(), [], `${name}: nothing may leave whatever precedes the doctype`);
+  }
 });

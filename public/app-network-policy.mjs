@@ -187,12 +187,21 @@ export function cspMetaTag(grant, options) {
  * it, and where an app's `<head>` tag appears is the app's choice: one that opened with
  * `<script src="https://elsewhere/x.js"></script><head>` would load that script before a policy placed in its
  * head existed. A meta before `<html>` lands in the implied head, and the app's own `<head>` tag is then merged
- * into it. A document with no doctype (or with anything in front of it) is given one, with the policy behind it.
+ * into it.
+ *
+ * The app's own doctype is kept ONLY when it is exactly the standard one preceded by nothing but HTML
+ * whitespace (PR #40 review). What JavaScript's `\s` calls whitespace the HTML parser may call content: a
+ * document that starts with a no-break space or a BOM-then-text has already opened `<body>` by the time its
+ * doctype is seen, and a policy placed after that doctype would sit in the body, where a meta CSP is ignored.
+ * Every other opening (no doctype, a legacy doctype, anything in front) is given a standard doctype and the
+ * policy ahead of all of it; the app's own doctype then arrives late and the parser discards it.
  */
+const STANDARD_DOCTYPE = /^[\t\n\f\r ]*<!doctype[\t\n\f\r ]+html[\t\n\f\r ]*>/i;
+
 export function applyNetworkPolicy(html, grant, options) {
   const src = typeof html === "string" ? html : "";
   const tag = cspMetaTag(grantWithin(readAppNetworkRequest(src), grant), options);
-  const doctype = src.match(/^\s*<!doctype\s+[^>]*>/i);
+  const doctype = src.match(STANDARD_DOCTYPE);
   return doctype
     ? `${doctype[0]}\n${tag}${src.slice(doctype[0].length)}`
     : `<!doctype html>\n${tag}\n${src}`;
