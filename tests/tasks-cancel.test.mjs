@@ -99,16 +99,8 @@ test("cancel with an executor that ignores the signal: cancel_unconfirmed with t
   assert.equal(f.entries().at(-1).task.state, "cancel_unconfirmed");
 });
 
-test("cancel: a person's stop asked while the executor finishes successfully anyway records COMPLETED, not cancelled", async (t) => {
-  const f = fixture(t, runner(async () => { await delay(150); return "already done"; }, CANCEL_ARM_DEADLINE_MS));
-  const { task } = f.admit();
-  await until(() => f.status(task.address), (s) => s.task?.state === "running");
-  const answer = await f.cancel(task.address, f.authority, 2000);
-  const final = await f.status(task.address);
-  assert.equal(final.task.state, "completed", "the work finished; the record says what happened, not what was asked");
-  assert.equal(final.task.answer, "already done");
-  assert.ok(answer.observed !== undefined);
-});
+// (An arm asserting this same claim with `await delay(150)` in the executor was removed under voicebox-beads-r93n:
+// it duplicated the arm above and only differed by being clock-gated, so a loaded box made it measure the box.)
 
 test("cancel: a terminal task refuses by name, and the refusal says which state it is already in", async (t) => {
   const f = fixture(t, runner(async () => { throw new Error("failed on purpose"); }));
