@@ -60,8 +60,6 @@ const decisions = new Map([
   ["POST /api/tasks/delegate", "json"],
   ["POST /api/root", "json"],
   ["POST /api/undo", "csrf"],
-  ["POST /api/mini-apps", "json"],
-  ["POST /api/mini-app/tools", "csrf"],
   ["POST /api/delegate", "json"],
   ["POST /api/exec", "json"],
   // voicebox-beads-3dma: writes files into the declared root from a caller-supplied bundle, so it is the host's
@@ -84,8 +82,6 @@ const decisions = new Map([
   ["PUT /api/keys", "json"],
   ["PUT /api/agent-settings", "json"],
   ["DELETE /api/root", "host-token"],
-  ["PUT /api/mini-apps", "json"],
-  ["DELETE /api/mini-apps", "json"],
   ["DELETE /api/pair", "host-token"],
   ["PATCH /api/agents/<param>", "authority"],
   ["DELETE /api/environments/<param>", "authority"],
@@ -604,9 +600,10 @@ test("a non-POST decision is checked against its handler, and an unused one is r
     /PATCH \/api\/agents\/<param>: declared authority but handler no longer calls its boundary/,
   );
 
-  const goneDelete = source.replace('if (req.method === "DELETE" && url.pathname === "/api/mini-apps") {', 'if (false) {');
-  assert.notEqual(goneDelete, source, "the DELETE /api/mini-apps handler must still be where this test removes it");
-  assert.throws(() => assertPostBoundary(goneDelete), /DELETE \/api\/mini-apps: obsolete json decision/);
+  // DELETE /api/pair stands in for DELETE /api/mini-apps, which moved to lib/routes/mini-apps.mjs (voicebox-beads-cwx5.1).
+  const goneDelete = source.replace('if (req.method === "DELETE" && url.pathname === "/api/pair") {', 'if (false) {');
+  assert.notEqual(goneDelete, source, "the DELETE /api/pair handler must still be where this test removes it");
+  assert.throws(() => assertPostBoundary(goneDelete), /DELETE \/api\/pair: obsolete host-token decision/);
 
   // The other control arm: a new READ verb stays out of the mutation inventory, so the widening did not turn every
   // route into a decision.
@@ -645,6 +642,13 @@ const MODULE_DECISIONS = new Map([
   ["POST /api/gemini/embed", "json"],
   ["POST /api/harnesses/configure", "json"],
   ["POST /api/presence", "json"],
+  // The Mini-App routes moved to lib/routes/mini-apps.mjs (voicebox-beads-cwx5.1). Three keep the JSON door in the
+  // module; POST /api/mini-app/tools reads its own bounded body, so its boundary is still the HOST's browser guard,
+  // which is where the csrf decision is checked.
+  ["POST /api/mini-apps", "json"],
+  ["PUT /api/mini-apps", "json"],
+  ["DELETE /api/mini-apps", "json"],
+  ["POST /api/mini-app/tools", "csrf"],
   ["DELETE /api/file", "json"],
   ["PUT /api/file", "json"],
   ["PATCH /api/file", "json"],
@@ -669,7 +673,17 @@ const MODULE_MECHANISMS = {
   authority: /has(?:ExplicitRoom|Extension)Authority\(/,
   "host-token": /hostTokenOk\(/,
   wall: null,
+  // Checked against the host's browser guard rather than the module's text: see hostCsrfGuard below.
+  csrf: null,
 };
+
+/** The host's browser-sensitive key list, the one place a csrf decision is enforced for any route, extracted or not. */
+function hostCsrfGuard(host = source) {
+  const guardStart = host.indexOf("  const browserSensitive =");
+  const guardEnd = host.indexOf("  if (browserSensitive && browserMutationRefused(req))", guardStart);
+  assert.ok(guardStart !== -1 && guardEnd > guardStart, "browser-sensitive decision must still exist");
+  return host.slice(guardStart, guardEnd);
+}
 
 /**
  * Every MUTATING route the extracted modules DECLARE AS A KEY, read as text with comments stripped:
@@ -708,6 +722,10 @@ function assertModuleBoundary(overrides = {}) {
     const decision = MODULE_DECISIONS.get(key);
     assert.ok(decision, `${key} (${file}): a new mutating route declared in an extracted module needs a decision here — json, csrf, host-token, authority or wall`);
     const mechanism = MODULE_MECHANISMS[decision];
+    if (decision === "csrf") {
+      assert.ok(hostCsrfGuard(overrides["server.mjs"]).includes(`key === "${key}"`), `${key} (${file}): missing browser CSRF guard in the host`);
+      continue;
+    }
     assert.ok(decision === "wall" || mechanism, `${key}: unknown decision kind ${decision}`);
     if (!mechanism) continue;
     const text = stripComments(overrides[file] ?? readFileSync(path.join(root, file), "utf8"));
@@ -752,4 +770,13 @@ test("the module scan refuses a new key, a deleted boundary, and a decision nobo
   const removed = source.replace('  "POST /api/extensions/reconfigure",', '');
   assert.notEqual(removed, source, "the mutant must have been inserted");
   assert.throws(() => assertModuleBoundary({ [file]: removed }), /POST \/api\/extensions\/reconfigure: obsolete authority decision/, "a decision with no route must fail the inventory");
+});
+
+test("an extracted csrf route is still checked against the host's browser guard (voicebox-beads-cwx5.1)", () => {
+  const unguarded = source.replace('key === "POST /api/mini-app/tools" ||', "");
+  assert.notEqual(unguarded, source, "the host guard must still name POST /api/mini-app/tools where this test removes it");
+  assert.throws(
+    () => assertModuleBoundary({ "server.mjs": unguarded }),
+    /POST \/api\/mini-app\/tools \(lib\/routes\/mini-apps\.mjs\): missing browser CSRF guard in the host/,
+  );
 });
