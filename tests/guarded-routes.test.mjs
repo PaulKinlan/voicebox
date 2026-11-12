@@ -482,6 +482,12 @@ test("pairing: the host mints, records and revokes, and each refusal is named", 
   assert.deepEqual(empty.answers.map((a) => [a.code, a.body.refused]), [[400, "bad-request"], [400, "bad-request"], [400, "bad-request"], [404, "not-paired"]]);
   assert.deepEqual(empty.calls, [["revoke", "env_other"]], "the key may ride the query string");
 
+  // An EMPTY body key is a bad request; it must not fall through to the query string and revoke that instead.
+  const emptyKey = pairingHarness({ hostToken: true, body: { envKey: "" } });
+  await emptyKey.call("DELETE", "/api/pair", "envKey=env_known");
+  assert.deepEqual([emptyKey.answers[0].code, emptyKey.answers[0].body.refused], [400, "bad-request"]);
+  assert.deepEqual(emptyKey.calls, [], "nothing is revoked");
+
   const unknown = pairingHarness({ hostToken: true, body: { envKey: "env_nope", bearer: "vbx_theirs" } });
   await unknown.call("POST", "/api/pair/complete");
   assert.deepEqual([unknown.answers[0].code, unknown.answers[0].body.refused], [404, "unknown-environment"]);
