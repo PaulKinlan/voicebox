@@ -147,6 +147,38 @@ function loopbackBootstrapProxy() {
   };
 }
 
+// NOTHING ON THE API PORT? SAY SO ONCE, BY NAME.
+//
+// `npm run dev` starts Vite only; server.mjs is a separate process
+// (`npm run serve`). A first run that skips it gets one ECONNREFUSED per
+// proxied request and no remedy, which reads like a crash (Paul, 2026-11-12).
+// Probe /api/health once Vite is listening and, if nothing answers, print the
+// exact command. A probe, not a spawn: lanes run their own server on their own
+// PORT, and a dev front that started one would race them.
+function apiTargetCheck() {
+  return {
+    name: "api-target-check",
+    configureServer(server) {
+      server.httpServer?.once("listening", () => {
+        const probe = request(`${API_TARGET}/api/health`, { method: "GET", timeout: 1500 }, (res) => {
+          res.resume();
+        });
+        const warn = () => {
+          const port = process.env.PORT ?? 8787;
+          server.config.logger.warn(
+            `\n  [voicebox] nothing is answering on ${API_TARGET}, so every /api, /live and /channel request will fail.\n` +
+              `  [voicebox] \`npm run dev\` is the Vite front only. Start the server in another terminal:\n\n` +
+              `      ${process.env.PORT ? `PORT=${port} ` : ""}npm run serve\n`,
+          );
+        };
+        probe.on("timeout", () => probe.destroy(new Error("timeout")));
+        probe.on("error", warn);
+        probe.end();
+      });
+    },
+  };
+}
+
 function loudStaticMiss() {
   return {
     name: "loud-static-miss",
@@ -281,7 +313,7 @@ export default defineConfig({
       "/browser": path.join(path.dirname(fileURLToPath(import.meta.url)), "browser"),
     },
   },
-  plugins: [buildStamp(), cspSafeViteClient(), loudStaticMiss(), loopbackBootstrapProxy()],
+  plugins: [buildStamp(), cspSafeViteClient(), loudStaticMiss(), loopbackBootstrapProxy(), apiTargetCheck()],
   root: "public",
   publicDir: false, // public/ IS the root; there is no second static dir
   // appType stays default ("spa") so "/" serves index.html. The loud 404 for a

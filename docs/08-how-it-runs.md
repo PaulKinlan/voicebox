@@ -31,8 +31,8 @@ In production (`npm start` or `npm run serve`), `node server.mjs` serves `public
 ## 2. Running in Development
 
 ```bash
-npm start          # Start server.mjs on http://127.0.0.1:8787
-npm run dev        # Start Vite dev server on :5173 (proxies /api, /live, /channel to :8787)
+npm start          # Start server.mjs on http://127.0.0.1:8787 (npm run serve restarts it on edits)
+npm run dev        # Start Vite dev server on :5173 (proxies /api, /live, /channel to :8787); does NOT start server.mjs
 npm run docs:check # Verify that documentation blocks and file references match the codebase
 npm run docs:write # Regenerate live-probed documentation blocks in README.md and docs/07-architecture.md
 ```
