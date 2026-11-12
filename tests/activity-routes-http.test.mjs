@@ -7,7 +7,7 @@ import { startServer } from "./lib/server.mjs";
 
 test("activity exact HTTP routes share the host producer and clear in place", async () => {
   const scratch = mkdtempSync(path.join(os.tmpdir(), "vb-activity-route-"));
-  const server = await startServer({ env: { VOICEBOX_LOOPBACK_AUTH: undefined } });
+  const server = await startServer({ env: { VOICEBOX_LOOPBACK_AUTH: "0" } });
   try {
     const fetchActivity = async () => {
       const response = await fetch(server.base + "/api/activity");

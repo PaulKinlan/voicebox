@@ -26,12 +26,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
 
+const GATE_OFF = { VOICEBOX_LOOPBACK_AUTH: "0" };
 const GATE_ON = { VOICEBOX_LOOPBACK_AUTH: "1", VOICEBOX_HELLO_BOUND_MS: "400" };
 
 async function scratchServer(env = {}) {
@@ -115,10 +116,10 @@ function rawGet(base, path, headers = {}) {
   });
 }
 
-// ── the default surface: GATE OFF ────────────────────────────────────────────
+// ── the opt-out surface: GATE OFF ────────────────────────────────────────────
 
-test("default OFF: the page answers without any cookie, and ?bootstrap= is ignored", async () => {
-  const server = await scratchServer();
+test("gate OFF (VOICEBOX_LOOPBACK_AUTH=0): the page answers without any cookie, and ?bootstrap= is ignored", async () => {
+  const server = await scratchServer(GATE_OFF);
   try {
     const page = await fetch(`${server.base}/`);
     assert.equal(page.status, 200, "the default surface serves the page openly (5c1 behaviour)");
@@ -133,8 +134,8 @@ test("default OFF: the page answers without any cookie, and ?bootstrap= is ignor
   }
 });
 
-test("default OFF: the bootstrap door does not exist", async () => {
-  const server = await scratchServer();
+test("gate OFF (VOICEBOX_LOOPBACK_AUTH=0): the bootstrap door does not exist", async () => {
+  const server = await scratchServer(GATE_OFF);
   try {
     const res = await fetch(`${server.base}/api/bootstrap`, {
       method: "POST",
@@ -150,8 +151,8 @@ test("default OFF: the bootstrap door does not exist", async () => {
   }
 });
 
-test("default OFF: a forged loopback Origin alone still takes the executor chair — the documented residual", async () => {
-  const server = await scratchServer();
+test("gate OFF (VOICEBOX_LOOPBACK_AUTH=0): a forged loopback Origin alone still takes the executor chair — the documented residual", async () => {
+  const server = await scratchServer(GATE_OFF);
   try {
     // This is the boundary 5c1 named and docs/13 §1 measured — PINNED here on purpose: the test
     // names what the gate-on block closes, and fails if the default ever drifts without a decision.
@@ -168,25 +169,115 @@ test("default OFF: a forged loopback Origin alone still takes the executor chair
   }
 });
 
-test("default OFF: startup names the unauthenticated loopback exposure and the flag remedy (k74h)", async () => {
-  const server = await scratchServer();
+test("gate OFF (VOICEBOX_LOOPBACK_AUTH=0): startup names the unauthenticated loopback exposure and the flag remedy (k74h)", async () => {
+  const server = await scratchServer(GATE_OFF);
   try {
-    // The owner ruling (2026-10-06) keeps the gate OFF by default as an accepted testing
-    // posture — accepted, not silent. The warning is the acceptance's visible half: it names
+    // Gate-off is an accepted testing posture, chosen by name since 2026-11-12 (it was the default
+    // before) — accepted, not silent. The warning is the acceptance's visible half: it names
     // the exposure (unauthenticated loopback clients, browser-originated requests included,
     // reaching state-mutating routes) and the remedy (the flag, and the measured gate-on
     // effect: 401 loopback-unauthenticated except the wall's own self-authorising exemptions —
     // health, which stays 200, the bootstrap door, and host-token requests).
-    const warned = await waitFor(() => server.stderr().includes("VOICEBOX_LOOPBACK_AUTH is not 1"));
+    const warned = await waitFor(() => server.stderr().includes("VOICEBOX_LOOPBACK_AUTH=0 — the loopback session gate is OFF"));
     assert.ok(warned, "gate-off startup must print the unauthenticated-loopback warning");
     assert.match(server.stderr(), /active workspace/, "the warning names the workspace-write exposure");
-    assert.match(server.stderr(), /VOICEBOX_LOOPBACK_AUTH=1/, "the warning names the flag remedy");
+    assert.match(server.stderr(), /restart without VOICEBOX_LOOPBACK_AUTH=0/, "the warning names the remedy");
     assert.match(server.stderr(), /401\s+loopback-unauthenticated/, "the warning names the gate's measured effect");
     assert.match(server.stderr(), /docs\/18-loopback-session-auth\.md/, "the warning points at the full posture doc");
-    assert.match(server.stderr(), /local-testing posture/, "the warning says the default is for local testing (owner ruling)");
+    assert.match(server.stderr(), /local-testing posture/, "the warning says gate-off is for local testing");
   } finally {
     await server.stop();
     server.cleanup();
+  }
+});
+
+// ── THE DEFAULT: gate on (owner decision 2026-11-12, voicebox-beads-9jhd / zqsr) ─────────────────
+
+test("default ON: with the variable unset the gate is on — no page, no API, and a bootstrap URL is printed", async () => {
+  const server = await scratchServer(); // scratchServer unsets the variable
+  try {
+    assert.ok(await waitFor(() => server.stdout().includes("bootstrap")), "the default startup prints the bootstrap URL");
+    assert.ok(!server.stderr().includes("gate is OFF"), "and no gate-off warning");
+    const api = await fetch(`${server.base}/api/root`);
+    assert.equal(api.status, 401);
+    assert.equal((await api.json()).refused, "loopback-unauthenticated");
+    // The command doors are behind the wall like everything else: this is the local-process hole the default closes.
+    for (const [route, body] of [["/api/exec", { command: "echo reached" }], ["/api/delegate", { agent: "pi", task: "x" }], ["/api/turn", { transcript: "run command echo reached" }]]) {
+      const res = await fetch(`${server.base}${route}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: server.base, "sec-fetch-site": "same-origin" },
+        body: JSON.stringify(body),
+      });
+      assert.equal(res.status, 401, `${route} must not answer a local process with no session, whatever Origin it writes`);
+    }
+    for (const value of ["", "1", "true", "off"]) {
+      // Only the exact opt-out turns the gate off; anything else — a typo included — leaves it on.
+      const other = await scratchServer({ VOICEBOX_LOOPBACK_AUTH: value });
+      try {
+        assert.equal((await fetch(`${other.base}/api/root`)).status, 401, `VOICEBOX_LOOPBACK_AUTH=${JSON.stringify(value)} leaves the gate on`);
+      } finally {
+        await other.stop();
+        other.cleanup();
+      }
+    }
+  } finally {
+    await server.stop();
+    server.cleanup();
+  }
+});
+
+test("default ON: a person who opens the address gets a page that says what to do, and no secret", async () => {
+  const server = await scratchServer();
+  try {
+    const page = await fetch(`${server.base}/`, { headers: { accept: "text/html,application/xhtml+xml" } });
+    assert.equal(page.status, 401, "still a refusal: nothing of the room is served");
+    assert.match(page.headers.get("content-type"), /text\/html/);
+    assert.equal(page.headers.get("set-cookie"), null);
+    const html = await page.text();
+    assert.match(html, /^<!doctype html>/i);
+    assert.match(html, /terminal/, "it says where the way in is");
+    assert.match(html, /VOICEBOX_LOOPBACK_AUTH=0/, "and names the testing opt-out");
+    assert.doesNotMatch(html, /[0-9a-f]{64}/, "no ticket, session or token appears in the page");
+    assert.doesNotMatch(html, /fused\.js|id="mic"/, "and none of the room does");
+    // A machine caller keeps the terse, named refusal.
+    const plain = await fetch(`${server.base}/`);
+    assert.match(await plain.text(), /^401 loopback-unauthenticated/);
+  } finally {
+    await server.stop();
+    server.cleanup();
+  }
+});
+
+test("default ON: a restart does not sign the browser out — the session is kept 0600 in the host directory", async () => {
+  const host = mkdtempSync(path.join(tmpdir(), "vb-loopback-restart-"));
+  const extensions = path.join(host, "extensions");
+  const env = { VOICEBOX_LOOPBACK_AUTH: undefined, VOICEBOX_EXTENSIONS_DIR: extensions };
+  const ticketOf = (server) => waitFor(() => server.stdout().match(/\?bootstrap=([0-9a-f]{64})/));
+  let first = await startServer({ env });
+  let second = null;
+  try {
+    const redeemed = await fetch(`${first.base}/?bootstrap=${(await ticketOf(first))[1]}`, { redirect: "manual" });
+    const cookie = sessionCookieFrom(redeemed);
+    assert.equal((await fetch(`${first.base}/api/root`, { headers: { cookie } })).status, 200);
+    const kept = path.join(extensions, ".loopback-session");
+    assert.equal(statSync(kept).mode & 0o777, 0o600, "the kept session is readable by the owner only");
+    assert.equal(`vb_session=${readFileSync(kept, "utf8")}`, cookie);
+    assert.equal((await fetch(`${first.base}/.loopback-session`, { headers: { cookie } })).status, 404, "and no route serves it");
+    await first.stop();
+    first = null;
+
+    second = await startServer({ env });
+    assert.equal((await fetch(`${second.base}/api/root`, { headers: { cookie } })).status, 200, "the same browser is still signed in after a restart");
+    assert.equal((await fetch(`${second.base}/api/root`)).status, 401, "and a caller with no cookie is still refused");
+    // Deleting the file is the sign-out: the next start mints a new secret and the old cookie is refused.
+    await second.stop();
+    rmSync(kept);
+    second = await startServer({ env });
+    assert.equal((await fetch(`${second.base}/api/root`, { headers: { cookie } })).status, 401);
+  } finally {
+    await first?.stop();
+    await second?.stop();
+    rmSync(host, { recursive: true, force: true });
   }
 });
 
@@ -198,7 +289,7 @@ test("gate ON: the gate-off warning is not printed — the bootstrap URL is the 
     const bootstrapped = await waitFor(() => server.stdout().includes("bootstrap"));
     assert.ok(bootstrapped, "gate-on startup prints the bootstrap URL");
     assert.ok(
-      !server.stderr().includes("VOICEBOX_LOOPBACK_AUTH is not 1"),
+      !server.stderr().includes("VOICEBOX_LOOPBACK_AUTH=0 — the loopback session gate is OFF"),
       "the unauthenticated-loopback warning must not fire when the gate is on",
     );
   } finally {

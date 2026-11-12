@@ -146,6 +146,9 @@ export async function startServer({ env = {}, cwd = ROOT, readyTimeoutMs = 20000
     // one. Per-suite solo runs are the reliable instrument for this; whole-gate runs are noisy.)
     env: {
       ...process.env,
+      // The loopback session gate is ON by default in the product; the suites drive the server as a raw
+      // command-line client, which is the workflow the opt-out exists for. A gate test passes "1" in `env`.
+      VOICEBOX_LOOPBACK_AUTH: process.env.VOICEBOX_LOOPBACK_AUTH ?? "0",
       PORT: "0",
       VOICEBOX_RESOLVER: env.VOICEBOX_RESOLVER ?? env.VOICEBOX_PROVIDER ?? "script",
       VOICEBOX_WORKSPACE: env.VOICEBOX_WORKSPACE ?? undefined, // undefined = omitted: no root from the shell

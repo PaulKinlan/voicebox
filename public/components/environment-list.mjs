@@ -195,7 +195,7 @@ async function renderEnvironments() {
     // The registry could not be read, or the server is not answering: the refusal is named, not blank.
     if (els.envCount) els.envCount.textContent = "Environments";
     if (els.envNote) els.envNote.textContent = err?.refused === "loopback-unauthenticated"
-      ? "This page has no session on this origin. Redeem a bootstrap ticket here, or restart without VOICEBOX_LOOPBACK_AUTH."
+      ? "This page has no session on this address. Open the one-time bootstrap link the server printed in its terminal, using this page's address as the host."
       : String(err?.message ?? "the environment list could not be read");
     throw err;
   }

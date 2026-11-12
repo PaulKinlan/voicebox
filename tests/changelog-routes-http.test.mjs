@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { startServer } from "./lib/server.mjs";
 
 test("exact changelog GET serves parsed git commits without capturing methods or adjacent health", async () => {
-  const server = await startServer({ env: { VOICEBOX_LOOPBACK_AUTH: undefined } });
+  const server = await startServer({ env: { VOICEBOX_LOOPBACK_AUTH: "0" } });
   try {
     const response = await fetch(server.base + "/api/changelog");
     assert.equal(response.status, 200);

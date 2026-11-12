@@ -5,7 +5,7 @@
 // The resolver is a provider seam (lib/resolver.mjs) — swap it, don't rewrite the server.
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { readdir as readdirAsync, readFile as readFileAsync, stat as statAsync } from "node:fs/promises";
 import { promisify } from "node:util";
 import { stripTypeScriptTypes } from "node:module";
@@ -428,13 +428,33 @@ function hasExplicitRoomAuthority(req) {
 //   cookie; a local process that cannot read the ticket output (a different UID, a container)
 //   can no longer fetch the page or take the executor chair by forging an Origin header.
 //
-// DEFAULT OFF: every check below asks LOOPBACK_AUTH first, so the default surface is byte-for-
-// byte the 5c1 behaviour and every existing suite runs unchanged. The secret is EPHEMERAL and
-// PER-PROCESS — a restart mints a new one and silently invalidates every issued cookie, which
-// is the honest failure mode: the remedy (open the URL the new process printed) is the launch.
-const LOOPBACK_AUTH = process.env.VOICEBOX_LOOPBACK_AUTH === "1";
+// DEFAULT ON (owner decision 2026-11-12, voicebox-beads-9jhd / zqsr; it replaces the 2026-10-06 ruling that
+// kept the gate off for testing). With the gate off, any process on the machine can run commands through
+// POST /api/exec, POST /api/delegate or a typed turn, and nothing the page can hold stops it: the room's own
+// token is served in the page. VOICEBOX_LOOPBACK_AUTH=0 turns the gate off, by name, for the raw
+// command-line testing workflow; the test harness (tests/lib/server.mjs) does exactly that.
+const LOOPBACK_AUTH = process.env.VOICEBOX_LOOPBACK_AUTH !== "0";
 const SESSION_COOKIE = "vb_session";
-const LOOPBACK_SESSION = randomBytes(32).toString("hex");
+// THE SESSION SECRET OUTLIVES A RESTART (2026-11-12). It was per-process, which was tolerable while the gate
+// was opt-in; with the gate on by default it would sign the person out on every restart, and `npm run serve`
+// restarts on every saved file. It now lives beside the host token, in the host's own directory, mode 0600 and
+// served by no route — the same custody as `.host-token`, which already passes this wall, so a reader of that
+// directory gains nothing new. Delete the file and restart to sign every browser out.
+const LOOPBACK_SESSION_FILE = path.join(HOST_DIR, ".loopback-session");
+function loadLoopbackSession() {
+  try {
+    const kept = readFileSync(LOOPBACK_SESSION_FILE, "utf8").trim();
+    if (/^[0-9a-f]{64}$/.test(kept)) return kept;
+  } catch { /* none yet, or unreadable: mint one */ }
+  const fresh = randomBytes(32).toString("hex");
+  try {
+    mkdirSync(HOST_DIR, { recursive: true });
+    writeFileSync(LOOPBACK_SESSION_FILE, fresh, { mode: 0o600 });
+    chmodSync(LOOPBACK_SESSION_FILE, 0o600); // an existing malformed file keeps its old mode otherwise
+  } catch { /* a host directory that cannot be written leaves the session per-process, as it was */ }
+  return fresh;
+}
+const LOOPBACK_SESSION = LOOPBACK_AUTH ? loadLoopbackSession() : randomBytes(32).toString("hex");
 const outstandingBootstrapTickets = new Set(); // single-use: consumed on redemption
 function mintBootstrapTicket() {
   const ticket = randomBytes(32).toString("hex");
@@ -2285,6 +2305,31 @@ function readJsonBody(req, res, maxBytes = DEFAULT_JSON_BODY_MAX_BYTES) {
  * server that answers "server-error" is wrong in a way a reader can act on and a server that says
  * nothing is not.
  */
+/** The page a person sees when they open the server without a session: what happened, and the two ways in. */
+function signInPage(frontClause = "") {
+  const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voicebox — open the sign-in link</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 34rem; }
+  h1 { font-size: 1.25rem; margin: 0 0 .5rem; }
+  code { font: .875rem/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
+  li { margin: .5rem 0; }
+</style></head><body><main>
+<h1>Open the sign-in link from your terminal</h1>
+<p>Voicebox is running, and it only answers a browser that has signed in. That stops other programs on this computer from using it to run commands.</p>
+<ol>
+<li>Look at the terminal where you started Voicebox. It printed a line starting with <code>bootstrap</code> and a link. Open that link in this browser. It works once.</li>
+<li>If the link is used up or gone, restart Voicebox to print a new one.</li>
+</ol>
+${frontClause ? `<p>${esc(frontClause.replace(/^\s*—\s*/, "").trim())}</p>` : ""}
+<p>For local testing only, start Voicebox with <code>VOICEBOX_LOOPBACK_AUTH=0</code> to turn this off.</p>
+</main></body></html>`;
+}
+
 function answerOnce(res, handler) {
   void (async () => {
     try {
@@ -4416,13 +4461,21 @@ async function handle(req, res) {
       extensions.hostTokenOk(req.headers["x-voicebox-host-token"]);
     if (!exempt) {
       const why =
-        "this server was started with VOICEBOX_LOOPBACK_AUTH=1: open the bootstrap URL it printed at startup " +
+        "this server answers only to a signed-in browser (the loopback session gate, on by default): open the bootstrap URL it printed at startup " +
         "(one-time), or mint a fresh ticket with POST /api/bootstrap and the x-voicebox-host-token header. " +
         "Requests carrying the host token pass directly. Everything else answers only with the session " +
         "cookie that the bootstrap exchange mints." +
         frontRefusalClause(req);
       if (url.pathname.startsWith("/api/")) {
         return json(res, 401, { ok: false, refused: "loopback-unauthenticated", why });
+      }
+      // A PERSON WHO TYPED THE ADDRESS gets a page that says what to do, not a line of protocol. It names no
+      // ticket and no token: the terminal that started the server is the only place the way in is printed.
+      const wantsPage = req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html") &&
+        String(req.headers.accept ?? "").includes("text/html");
+      if (wantsPage) {
+        res.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        return res.end(signInPage(frontRefusalClause(req)));
       }
       res.writeHead(401, { "content-type": "text/plain; charset=utf-8" });
       return res.end(`401 loopback-unauthenticated — ${why}`);
@@ -5748,17 +5801,17 @@ try {
     // GET /api/health for supervisors, and the bootstrap door, the ?bootstrap= page and
     // host-token requests, each on its own authority (server.mjs's LOOPBACK_AUTH block).
     console.warn(
-      `WARNING  VOICEBOX_LOOPBACK_AUTH is not 1 (unset or disabled) — the loopback session gate is OFF (the default).\n` +
+      `WARNING  VOICEBOX_LOOPBACK_AUTH=0 — the loopback session gate is OFF (it is on by default).\n` +
         `         Any unauthenticated client on loopback, including requests a page the operator\n` +
         `         visits can cause the browser to send, can reach state-mutating routes on\n` +
         `         http://127.0.0.1:${bound} — writing files into the active workspace and registering\n` +
         `         environments — with no credential and no prompt.\n` +
-        `         Remedy: restart with VOICEBOX_LOOPBACK_AUTH=1. Without the session cookie minted\n` +
+        `         Remedy: restart without VOICEBOX_LOOPBACK_AUTH=0. Without the session cookie minted\n` +
         `         by the one-time bootstrap URL printed at startup, every HTTP route then answers\n` +
         `         401 loopback-unauthenticated (WebSocket upgrades refuse under their own names).\n` +
         `         Exempt: GET /api/health, which stays 200 for supervisors, and the bootstrap door,\n` +
         `         the ?bootstrap= page, and host-token requests, which pass on their own authority.\n` +
-        `         The gate-off default is a local-testing posture — run with the flag outside testing.\n` +
+        `         Gate-off is a local-testing posture — leave the gate on outside testing.\n` +
         `         See docs/18-loopback-session-auth.md.`,
     );
   }

@@ -48,7 +48,7 @@ When Voicebox routes actions between the server and a browser-owned root (`opfs`
 
 The `/channel` WebSocket endpoint in `server.mjs` enforces an entitlement check before any connection is registered as the active `pageSocket` executor:
 
-1. **Same-Origin Local Browser**: Connections carrying a loopback `Origin` header (`http://127.0.0.1:<port>`, `http://localhost:<port>`, or `http://[::1]:<port>`, plus a valid session cookie when `VOICEBOX_LOOPBACK_AUTH=1` is enabled) are admitted directly. Because browsers enforce `Origin` headers on WebSocket upgrades, this blocks Cross-Site WebSocket Hijacking (CSWSH) from external web pages.
+1. **Same-Origin Local Browser**: Connections carrying a loopback `Origin` header (`http://127.0.0.1:<port>`, `http://localhost:<port>`, or `http://[::1]:<port>`, plus a valid session cookie unless the loopback gate is turned off with `VOICEBOX_LOOPBACK_AUTH=0`) are admitted directly. Because browsers enforce `Origin` headers on WebSocket upgrades, this blocks Cross-Site WebSocket Hijacking (CSWSH) from external web pages.
 2. **Paired Remote Environment**: Connections without a local browser `Origin` must send an authenticated hello frame within `VOICEBOX_HELLO_BOUND_MS` (default `5000ms`):
    ```json
    { "type": "hello", "role": "environment", "bearer": "vbx_..." }

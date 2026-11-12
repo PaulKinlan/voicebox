@@ -61,7 +61,7 @@ Pairing a local host with a remote environment is an explicit, host-authorized o
 
 ### WebSocket Upgrade Gates (`/live` and `/channel`)
 Both `/live` (voice session gateway) and `/channel` (routed action executor) authenticate connections before allocating sessions or registering an executor:
-1. **Local Same-Origin Browser**: Connections whose `Origin` matches the local server's bound loopback origin (`127.0.0.1`, `localhost`, or `[::1]`, plus the session cookie when `VOICEBOX_LOOPBACK_AUTH=1` is enabled) are admitted directly.
+1. **Local Same-Origin Browser**: Connections whose `Origin` matches the local server's bound loopback origin (`127.0.0.1`, `localhost`, or `[::1]`, plus the session cookie unless the loopback gate is turned off with `VOICEBOX_LOOPBACK_AUTH=0`) are admitted directly.
 2. **Paired Remote Peer**: Non-local connections must send an initial authentication frame within `VOICEBOX_HELLO_BOUND_MS` (default `5000ms`):
    ```json
    { "type": "hello", "role": "environment", "bearer": "vbx_..." }

@@ -120,12 +120,12 @@ test("protocol: host token and in-room session token accept exactly what they ac
   const scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "voicebox-sseh-")));
   const workspace = path.join(scratch, "workspace");
   mkdirSync(workspace, { recursive: true });
-  // VOICEBOX_LOOPBACK_AUTH: undefined pins the POSTURE UNDER TEST rather than inheriting whatever the
+  // VOICEBOX_LOOPBACK_AUTH: "0" pins the POSTURE UNDER TEST rather than inheriting whatever the
   // ambient shell is set to: with the wall on, the invalid-token requests below are refused 401 by the
   // loopback wall before this route can answer 403, and the assertions would be measuring the shell
   // (the tests/loopback-auth.test.mjs pattern). The cookie test further down pins it ON deliberately.
   const server = await startServer({ env: {
-    VOICEBOX_LOOPBACK_AUTH: undefined,
+    VOICEBOX_LOOPBACK_AUTH: "0",
     VOICEBOX_WORKSPACE: workspace,
     VOICEBOX_EXTENSIONS_DIR: path.join(scratch, "extensions"),
   } });
@@ -306,7 +306,7 @@ test("protocol: POST /api/root is decided by the second session-token site", asy
     try { await server?.stop(); } finally { rmSync(scratch, { recursive: true, force: true }); }
   });
   server = await startServer({ env: {
-    VOICEBOX_LOOPBACK_AUTH: undefined,
+    VOICEBOX_LOOPBACK_AUTH: "0",
     VOICEBOX_WORKSPACE: workspace,
     VOICEBOX_EXTENSIONS_DIR: path.join(scratch, "extensions"),
   } });

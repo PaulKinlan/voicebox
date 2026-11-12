@@ -1810,7 +1810,7 @@ async function health() {
     const source = err?.route ?? downstreamRoute;
     if (els.where) {
       if (err?.refused === "loopback-unauthenticated") {
-        els.where.textContent = "this page has no session on this origin — redeem a bootstrap ticket here or restart without VOICEBOX_LOOPBACK_AUTH";
+        els.where.textContent = "no session on this address — open the bootstrap link from the terminal here";
       } else {
         els.where.textContent = err?.refused === "environment-list-unreadable"
           ? "the environment list could not be read — fix the file"
@@ -1821,7 +1821,7 @@ async function health() {
       els.where.title = `source: GET ${source} · ${err?.refused ?? err?.message ?? "request failed"}: ${err?.why ?? err?.message ?? "see the route error"}`;
     }
     if (els.envNote && err?.refused === "loopback-unauthenticated") {
-      els.envNote.textContent = "This page has no session on this origin. Redeem a bootstrap ticket here, or restart without VOICEBOX_LOOPBACK_AUTH.";
+      els.envNote.textContent = "This page has no session on this address. Open the one-time bootstrap link the server printed in its terminal, using this page's address as the host.";
     }
   }
 }
