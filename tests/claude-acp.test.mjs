@@ -401,3 +401,29 @@ test("resolveClaudeCli and npxOnPath expand leading tilde (voicebox-beads-cs4l)"
   }
 });
 
+
+test("npx cache: an unusable cached adapter does not hide a usable one, and any version is accepted", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-claude-cache-"));
+  const realHome = process.env.HOME;
+  process.env.HOME = home;
+  t.after(() => { process.env.HOME = realHome; fs.rmSync(home, { recursive: true, force: true }); });
+  const bin = path.join(home, "bin");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "npx"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const cached = (slot, version, withEntry) => {
+    const dir = path.join(home, ".npm", "_npx", slot, "node_modules", "@agentclientprotocol", "claude-agent-acp");
+    fs.mkdirSync(path.join(dir, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: CLAUDE_ACP_AGENT.name, version, bin: { "claude-agent-acp": "dist/index.js" } }));
+    if (withEntry) fs.writeFileSync(path.join(dir, "dist", "index.js"), "");
+    return fs.realpathSync(dir);
+  };
+  // Both orders: whichever the directory listing yields first, the copy with no entry point is skipped.
+  cached("a-broken", "0.90.0", false);
+  const usable = cached("b-usable", "0.91.0", true);
+  cached("c-broken", CLAUDE_ACP_AGENT.version, false);
+  const found = describeClaudeAdapterInstall({ pathEnv: bin });
+  assert.equal(found.ok, true);
+  assert.equal(found.adapterDir, usable, "the usable cached copy runs, not a fresh npx install");
+  assert.equal(found.installedVersion, "0.91.0", "a version nobody pinned is accepted and reported");
+  assert.match(found.describe, /0\.91\.0 via npx/);
+});
