@@ -2875,58 +2875,6 @@ async function send(said) {
   }
 }
 
-// ── the microphone: the browser's dictation, and nothing more ─────────────
-let recognition = null;
-
-function listening(on) {
-  if (els.stage) els.stage.dataset.voice = on ? "listening" : "off";
-  els.mic?.setAttribute("aria-pressed", String(on));
-}
-
-function startListening() {
-  // live-voice.js owns the microphone when it is on the page: dictation and a
-  // live session must never both answer one click (module order is not a
-  // guarantee, so this is checked at click time, not at attach time).
-  if (window.__voiceboxLive) return;
-  const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-  if (!Recognition) {
-    setState("No speech recognition in this browser — type your turn below.", "warn");
-    return;
-  }
-  if (recognition) { recognition.stop(); return; }
-  const rec = new Recognition();
-  let stopped = "";
-  recognition = rec;
-  rec.lang = document.documentElement.lang || "en-GB";
-  rec.interimResults = false;
-  rec.maxAlternatives = 1;
-  rec.onresult = (event) => {
-    const said = event.results[0][0].transcript;
-    setState("Heard it — sending your turn…");
-    send(said);
-  };
-  rec.onerror = (event) => {
-    stopped = `Speech recognition stopped: ${event.error}.`;
-    setState(stopped, "warn");
-  };
-  rec.onend = () => {
-    recognition = null;
-    listening(false);
-    if (!stopped) setState("Microphone off — press the circle to speak");
-  };
-  try {
-    rec.start();
-    listening(true);
-    setState("Listening — speak your turn, then pause.");
-  } catch (error) {
-    recognition = null;
-    listening(false);
-    setState(`Could not start the microphone: ${error.message}`, "warn");
-  }
-}
-
-on(els.mic, "click", startListening);
-
 // ── the docked mic (voicebox-beads-dzd): the ring's delegate, not a rival ──
 // The ring scrolls with the page; the microphone must not. While the ring is on
 // screen the dock stays hidden (the ring button is the one mic, in the page and

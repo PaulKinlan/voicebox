@@ -8,8 +8,8 @@ This document traces how a user turn flows through Voicebox from initial speech 
 
 A turn can start from two entry points, both converging on the same server-side action executor:
 
-1. **Text Composer & Dictation (`POST /api/turn`)**:
-   - Submitting text from the stage composer (`#text-form`), browser `SpeechRecognition` dictation, or the Picture-in-Picture widget sends `{ transcript }` (or a schema-validated `{ action: { verb, ... } }` from `COMMAND_VERBS`) to `POST /api/turn`.
+1. **Text Composer (`POST /api/turn`)**:
+   - Submitting text from the stage composer (`#text-form`) or the Picture-in-Picture widget sends `{ transcript }` (or a schema-validated `{ action: { verb, ... } }` from `COMMAND_VERBS`) to `POST /api/turn`.
    - `POST /api/turn` is stateless: it resolves the transcript, executes the resulting action in the active workspace root, records the audit trail, and returns `{ transcript, action, result }`:
      ```json
      {

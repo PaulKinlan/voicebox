@@ -214,7 +214,6 @@ test("system-command-bus: open_panel handler", async () => {
 test("system-command-bus: stop_speaking handler", async () => {
   let micClicks = 0;
   let micPressed = false;
-  let speechCancelled = false;
   let interruptClicks = 0;
   let providerInterrupted = false;
 
@@ -233,9 +232,6 @@ test("system-command-bus: stop_speaking handler", async () => {
   };
 
   const mockWin = {
-    speechSynthesis: {
-      cancel: () => { speechCancelled = true; },
-    },
     __voiceboxLiveClient: {
       interruptSpeech: (src) => { if (src === "page") providerInterrupted = true; },
     },
@@ -247,7 +243,6 @@ test("system-command-bus: stop_speaking handler", async () => {
   const resInterrupt = await stopHandler({ command: "stop_speaking" });
   assert.equal(resInterrupt.ok, true);
   assert.equal(resInterrupt.action, "interrupt");
-  assert.equal(speechCancelled, true);
   assert.equal(interruptClicks, 1);
 
   // Mute when unpressed: no click

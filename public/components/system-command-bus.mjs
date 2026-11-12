@@ -251,9 +251,6 @@ export function createStopSpeakingHandler({ els = {}, window = globalThis.window
       }
       return { ok: true, action: "mute", message: "Microphone muted." };
     }
-    try {
-      win?.speechSynthesis?.cancel?.();
-    } catch {}
     const interruptBtn = currentEls.interrupt || doc?.getElementById?.("interrupt");
     if (interruptBtn) {
       const wasDisabled = interruptBtn.disabled;

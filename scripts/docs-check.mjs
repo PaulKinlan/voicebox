@@ -513,7 +513,7 @@ async function resolverVerbs() {
     "create a tool called clock that tells the time",
     "run the tool clock",
   ];
-  return Promise.all(utterances.map(async (utterance) => ({ utterance, verb: (await resolveTurn(utterance)).verb ?? "(unresolved)" })));
+  return Promise.all(utterances.map(async (utterance) => ({ utterance, verb: (await resolveTurn(utterance, "script")).verb ?? "(unresolved)" })));
 }
 
 /** The catalogue: every tracked descriptor, and what the REAL gate says about it on this placement. */
@@ -556,7 +556,7 @@ function refusalNames() {
 /** Every environment variable the server and its libraries read, with where. */
 const ENV_MEANING = {
   PORT: "HTTP server port bound on `127.0.0.1` (default `8787`).",
-  VOICEBOX_RESOLVER: "Default text turn resolver used by `POST /api/turn` (`script`, `gemini`, `openai`, or `claude`; default `script`).",
+  VOICEBOX_RESOLVER: "Text turn resolver used by `POST /api/turn` (`gemini`, `openai` or `claude`). Unset, it follows the model key that is present; with no key, turns are refused. `script` is a keyless test/development parser and is never the default.",
   VOICEBOX_PROVIDER: "Deprecated alias for `VOICEBOX_RESOLVER`, retained for backward compatibility.",
   VOICEBOX_WORKSPACE: "Declares an active machine project root at startup and stores extension proposals (`proposals/`) and extension audit logs (`audit.jsonl`).",
   VOICEBOX_EXTENSIONS_DIR: "Host state directory storing admitted extensions, `.host-token`, `.ledger.jsonl`, `.pairings.json`, `.api-keys.json`, and `.harness-settings.json` (mode `0600`).",
@@ -802,7 +802,6 @@ async function blocks() {
   const { tags, worklets } = pageScripts();
   const handshakes = liveHandshakes();
   const liveReachesExecutor = liveHandlerReachesExecutor();
-  const dictation = /SpeechRecognition/.test(readFileSync(join(ROOT, "public/fused.js"), "utf8"));
   // A COMMITTED DOCUMENT CANNOT CONTAIN AN ABSOLUTE PATH — and the loop no longer HAS a default root to
   // report either: the active root is declared by the environment, so what belongs in the document is the
   // SHAPE of that declaration (\`declared\` and the root object), not a path that is true in one checkout.
@@ -842,8 +841,8 @@ async function blocks() {
     providers: block("providers", [
       `**Registered turn resolvers** (\`lib/resolver.mjs\`): ${providers.map((p) => "`" + p + "`").join(", ")}${providers.length === 1 ? " (single resolver)" : ""}`,
       "",
-      `* **Registration & Dispatch**: \`registerResolver(name, fn)\` registers a text turn resolver; \`resolveTurn(transcript, provider = "${sampleProvider ?? "—"}")\` resolves a user transcript into a structured action.`,
-      `* **Deterministic Script Resolver (\`${sampleProvider ?? "—"}\`)**: Maps common file and tool commands without requiring an external API key (for example, \`"create a file called hello.txt with hi"\` → \`${JSON.stringify(sample)}\`).`,
+      `* **Registration & Dispatch**: \`registerResolver(name, fn)\` registers a text turn resolver; \`resolveTurn(transcript, provider)\` resolves a user transcript into a structured action; with no provider (no model key) it refuses the turn instead of guessing.`,
+      `* **Deterministic Script Resolver (\`${sampleProvider ?? "—"}\`)**: A test and development resolver, chosen only with \`VOICEBOX_RESOLVER=script\`; it is never the default, and with no model key a turn is refused with \`NO_MODEL_NOTE\`. It maps common file and tool commands (for example, \`"create a file called hello.txt with hi"\` → \`${JSON.stringify(sample)}\`).`,
       `* **Supported Verbs**: ${verbSamples.map((v) => `\`${v.verb}\``).join(", ")}. Prompts outside the deterministic grammar return an explicit \`unresolved\` response (for example, \`"book me a flight to Lisbon"\` → \`${JSON.stringify(unresolved.unresolved?.slice(0, 42) + "…")}\`).`,
       `* **Live Voice Providers**: Full-duplex audio providers (${availableLiveProviders().map((p) => "`" + p + "`").join(", ")}) are registered separately via \`registerLiveProvider\` in \`lib/live-session.mjs\` and stream audio and tool calls over \`/live\`.`,
     ].join("\n")),
@@ -905,7 +904,6 @@ async function blocks() {
       "| Input Path | Active | Transport | Execution Pipeline |",
       "|---|---|---|---|",
       `| **Text Composer** | ${routes.find((r) => r.path === "/api/turn")?.status === 200 ? "Yes" : "No"} | \`public/fused.js\` → \`POST /api/turn\` | \`resolveTurn()\` (\`lib/resolver.mjs\`, default \`${health.provider}\`) → \`execute()\` (\`server.mjs\`) → \`callTool()\` (\`lib/extensions.mjs\`) |`,
-      `| **Browser Dictation** (\`SpeechRecognition\`) | ${dictation ? "Yes" : "No"} | \`public/fused.js\` → \`POST /api/turn\` | Same pipeline as Text Composer |`,
       `| **Live Voice Audio** | Audio: Yes; Tools: **${liveReachesExecutor ? "Yes" : "No"}** | \`public/live-voice.js\` → \`/live\` → \`lib/live-session.mjs\` | ${liveReachesExecutor ? "Provider tool call → `commandToAction()` → `execute()` → correlated tool response + `{type:\"tool\"}` UI notification" : "Audio/text streaming only"} |`,
       "",
       `**Live Session Tool Declarations**: ${handshakes.map((h) => "`" + h.name + "` declares: " + (h.tools === null ? "(not captured)" : h.tools.length ? h.tools.map((t) => "`" + t + "`").join(", ") : "**none**")).join("; ")}.`,
