@@ -421,3 +421,26 @@ test("giving up on the prompt CANCELS the room before the app is told nothing wa
   assert.equal(reply.refused, "host-action-no-operator");
   assert.match(reply.error, /nothing was sent/);
 });
+
+test("the room answers the channel a host action ARRIVED on, bounds the body read, and keeps the tool waiting while it runs", () => {
+  // Three review findings on the landing PR, pinned the way the dispatch ordering above is pinned (a browser
+  // remount racing a 120s fetch cannot be driven here):
+  const room = readFileSync(path.join(root, "public", "components", "mini-app-surface.mjs"), "utf8");
+  const answer = room.slice(room.indexOf("async function answerHostAction("), room.indexOf("function callTool("));
+  // 1. Every bridge numbers its calls from 1, so a late result sent to "whichever app is mounted now" is taken by
+  //    the NEW app as the answer to its own call. The channel is captured on arrival and nothing else is used.
+  assert.match(room, /port1\.onmessage = \(event\) => handleBridgeEvent\(event\.data, channel\)/, "each channel must hand over itself with its messages");
+  assert.match(room, /void answerHostAction\(data, channel\)/);
+  assert.doesNotMatch(answer, /currentChannel\./, "a host action must never be answered through the currently mounted app's channel");
+  assert.doesNotMatch(room.slice(room.indexOf("function replyToApp("), room.indexOf("async function answerHostAction(")).split("const HOST_ACTION_FETCH_MS")[0], /currentChannel/);
+  // 2. fetch() settles on headers: the body read sits inside the same try, before the deadline is cleared.
+  const fetchAt = answer.indexOf("response = await fetch(path, {");
+  const bodyAt = answer.indexOf("bodyText = await response.text();");
+  const catchAt = answer.indexOf("} catch (err) {", fetchAt);
+  const clearAt = answer.indexOf("clearTimeout(deadline);", fetchAt);
+  assert.ok(fetchAt > 0 && bodyAt > fetchAt && bodyAt < catchAt && catchAt < clearAt, "the body must be read under the request's deadline and its indeterminate catch");
+  assert.doesNotMatch(answer, /\.text\(\)\.catch\(/, "a body that failed to arrive must not become an empty success");
+  // 3. An approved action in flight holds the room's tool budget open, exactly as an unanswered prompt does.
+  assert.match(room, /if \(pendingHostAction \|\| executingHostActions > 0\) \{\s*entry\.timer = armCallTimer\(\);/);
+  assert.ok(answer.indexOf("executingHostActions += 1;") < fetchAt && answer.indexOf("executingHostActions -= 1;") > catchAt, "the in-flight count must bracket the request");
+});

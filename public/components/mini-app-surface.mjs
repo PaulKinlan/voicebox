@@ -65,6 +65,9 @@ export function initMiniAppHost({
   // the first is unanswered is refused by name rather than stacked, so app code cannot bury a consent question
   // under a queue of its own making.
   let pendingHostAction = null;
+  // Approved host actions whose request this page has sent and not yet heard back from. While one is in flight
+  // the tool that asked for it is still working, so the room's 5.5s tool budget must not expire under it.
+  let executingHostActions = 0;
 
   async function syncMiniAppTools(appId, tools) {
     try {
@@ -80,8 +83,10 @@ export function initMiniAppHost({
     } catch { /* best-effort sync */ }
   }
 
-  function handleBridgeEvent(data) {
+  function handleBridgeEvent(data, channel = currentChannel) {
     if (!data) return;
+    // A message from a channel that has been replaced belongs to an app that is no longer mounted.
+    if (channel !== currentChannel) return;
     if ((data.type === "tools_updated" || data.type === "app_ready") && Array.isArray(data.tools)) {
       currentTools = data.tools;
       if (window.__voiceboxMiniAppRegistry) {
@@ -92,7 +97,7 @@ export function initMiniAppHost({
       // after the app was told "nothing was sent" would be exactly the lie this protocol exists to prevent.
       if (pendingHostAction) pendingHostAction.finish(false, "the app's relay gave up waiting for an answer");
     } else if (data.type === "host_action_request") {
-      void answerHostAction(data);
+      void answerHostAction(data, channel);
     } else if (data.type === "tool_result" && data.callId && pendingToolCalls.has(data.callId)) {
       const entry = pendingToolCalls.get(data.callId);
       pendingToolCalls.delete(data.callId);
@@ -120,9 +125,12 @@ export function initMiniAppHost({
   //     host action nobody approved;
   //   * the answer the app receives carries the route's REAL status and bytes, so an app that reports
   //     "Landed …" is still reporting the server's own answer (the ulhi rule), not the approval.
-  function replyToApp(callId, msg) {
+  // The answer goes to the channel the request ARRIVED on, never to whichever app is mounted when it is ready:
+  // every bridge numbers its calls from 1, so app A's late result posted to app B's channel would be taken by
+  // B as the answer to its own `fetch-1`. A replaced channel's port is closed, so a late answer is dropped.
+  function replyToApp(channel, callId, msg) {
     try {
-      if (currentChannel) currentChannel.port1.postMessage({ type: "host_action_result", callId, ...msg });
+      if (channel) channel.port1.postMessage({ type: "host_action_result", callId, ...msg });
     } catch {}
   }
 
@@ -224,7 +232,7 @@ export function initMiniAppHost({
     });
   }
 
-  async function answerHostAction(data) {
+  async function answerHostAction(data, channel = currentChannel) {
     const callId = data?.callId;
     if (typeof callId !== "string" || !callId) return;
     const method = String(data.method || "").toUpperCase();
@@ -232,14 +240,14 @@ export function initMiniAppHost({
     const pathname = path.split("?")[0].split("#")[0];
     const policy = relayPolicy(method, pathname);
     if (!policy.ok || policy.kind !== "host-action") {
-      replyToApp(callId, {
+      replyToApp(channel, callId, {
         ok: false,
         error: `the room refuses this host action: ${policy.ok ? `${policy.route} is not one of the approved host actions` : policy.why}`,
       });
       return;
     }
     if (pendingHostAction) {
-      replyToApp(callId, {
+      replyToApp(channel, callId, {
         ok: false,
         error: "the room is still waiting for a person to answer another host action; nothing was sent",
       });
@@ -253,7 +261,7 @@ export function initMiniAppHost({
       body: data.body,
     });
     if (!approved.allowed) {
-      replyToApp(callId, { ok: false, error: `${approved.why || "the room did not approve this action"}; nothing was sent` });
+      replyToApp(channel, callId, { ok: false, error: `${approved.why || "the room did not approve this action"}; nothing was sent` });
       return;
     }
 
@@ -262,7 +270,7 @@ export function initMiniAppHost({
     // boundary and content-type. A body the relay cannot carry is refused by name, never silently emptied.
     const carried = relayBody(data.body, { maxBytes: 65536 });
     if (!carried.ok) {
-      replyToApp(callId, { ok: false, error: `the room refuses this host action's body: ${carried.error}; nothing was sent` });
+      replyToApp(channel, callId, { ok: false, error: `the room refuses this host action's body: ${carried.error}; nothing was sent` });
       return;
     }
     // The room's own request, with the room's own Origin: the app's approval is a person's click, not a header
@@ -273,11 +281,13 @@ export function initMiniAppHost({
     // request is on the wire. Its consent clock retires on this message and a much longer one takes over, so a
     // slow operator plus a slow route can never make the app hear "nothing was sent" about a request that ran.
     try {
-      if (currentChannel) currentChannel.port1.postMessage({ type: "host_action_state", callId, state: "executing" });
+      if (channel) channel.port1.postMessage({ type: "host_action_state", callId, state: "executing" });
     } catch {}
     const abort = new AbortController();
     const deadline = setTimeout(() => abort.abort(), HOST_ACTION_FETCH_MS);
     let response;
+    let bodyText;
+    executingHostActions += 1;
     try {
       response = await fetch(path, {
         method,
@@ -286,10 +296,13 @@ export function initMiniAppHost({
         body: carried.body,
         signal: abort.signal,
       });
+      // fetch() settles when the HEADERS arrive. The body is read under the same deadline and the same catch:
+      // a stalled body must still be abandoned, and a body that fails to arrive is not an empty success.
+      bodyText = await response.text();
     } catch (err) {
       // The request WAS dispatched, so this is an indeterminate outcome, not a refusal: a timeout can abandon a
       // request the server went on to apply, and a network error can follow a request that arrived.
-      replyToApp(callId, {
+      replyToApp(channel, callId, {
         ok: false,
         indeterminate: true,
         refused: abort.signal.aborted ? "host-action-abandoned" : "host-action-unanswered",
@@ -300,9 +313,9 @@ export function initMiniAppHost({
       return;
     } finally {
       clearTimeout(deadline);
+      executingHostActions -= 1;
     }
-    const bodyText = await response.text().catch(() => "");
-    replyToApp(callId, {
+    replyToApp(channel, callId, {
       ok: true,
       status: response.status,
       headers: { "content-type": response.headers.get("content-type") || "application/json" },
@@ -325,7 +338,8 @@ export function initMiniAppHost({
         timer: null,
       };
       const armCallTimer = () => setTimeout(() => {
-        if (pendingHostAction) {
+        // …nor while an approved action is on the wire: that wait is bounded by HOST_ACTION_FETCH_MS.
+        if (pendingHostAction || executingHostActions > 0) {
           entry.timer = armCallTimer();
           return;
         }
@@ -542,7 +556,8 @@ export function initMiniAppHost({
       try { currentChannel.port1.close(); } catch {}
     }
     currentChannel = new MessageChannel();
-    currentChannel.port1.onmessage = (event) => handleBridgeEvent(event.data);
+    const channel = currentChannel;
+    channel.port1.onmessage = (event) => handleBridgeEvent(event.data, channel);
 
     const onBridgeHandshake = (e) => {
       if (e.origin !== window.location.origin) return;
@@ -552,7 +567,7 @@ export function initMiniAppHost({
         outer.contentWindow.postMessage(
           { type: "mini_app_port", appId },
           window.location.origin,
-          [currentChannel.port2],
+          [channel.port2],
         );
         outer.contentWindow.postMessage(
           { type: "load_app", appId, html: descriptor.html, title },
