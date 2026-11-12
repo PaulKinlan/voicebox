@@ -84,6 +84,15 @@ test("the frame SDK is built from this same function, so the two halves cannot d
   assert.match(bridge, /const res = await fetch\(target\.href, \{/, "the bridge must fetch the RESOLVED target");
   assert.match(bridge, /var target = relayTarget\(url, RELAY_BASE\);/, "the frame must ask the same gate");
   assert.match(bridge, /url: target\.pathname \+ target\.search \+ target\.hash,/, "the frame must send a resolved path");
-  // The list of relayable methods is unchanged: this fix is about WHERE, not what.
-  assert.match(bridge, /\[\"GET\", \"POST\", \"PUT\", \"PATCH\", \"DELETE\", \"HEAD\"\]\.includes\(method\)/);
+  // The list of relayable methods is gone on purpose (voicebox-beads-j6im): "any same-origin method" WAS the
+  // finding — an opaque-origin frame asked the bridge for `POST /api/branches/merge` and the bridge ran it with
+  // the room page's authority. What may be carried is decided by the policy table (public/relay-policy.mjs), and
+  // a host mutation must take the room's consent path instead of this page's own fetch.
+  assert.doesNotMatch(
+    bridge,
+    /\["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"\]\.includes\(method\)/,
+    "the permissive method allowlist is the defect this fix removed; it must not come back",
+  );
+  assert.match(bridge, /const policy = relayPolicy\(method, target\.pathname\);/, "the bridge must classify what it is asked to carry");
+  assert.match(bridge, /if \(policy\.kind === "host-action"\) \{/, "a host mutation must refuse the bridge's own fetch and ask the room");
 });
