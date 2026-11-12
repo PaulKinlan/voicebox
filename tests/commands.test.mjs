@@ -62,6 +62,7 @@ test("the voice can list and open a saved Mini-App by name, without writing html
   assert.deepEqual(commandToAction("list_mini_apps"), { verb: "list_mini_apps", name: "" });
   assert.deepEqual(commandToAction("open_mini_app", { app: " Calculator " }), { verb: "open_mini_app", target: "Calculator" });
   assert.equal(commandToAction("open_mini_app", {}).refused, "missing-argument");
+  assert.match(COMMANDS.find((c) => c.name === "open_mini_app").instruction, /target =/, "the text resolver schema names target, not app");
   const instruction = liveSystemInstruction();
   assert.match(instruction, /open_mini_app/);
   assert.match(instruction, /list_mini_apps/);

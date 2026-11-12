@@ -2836,7 +2836,8 @@ async function execute(action) {
     const miniAppFileName = action.fileName || (found?.ok ? path.basename(found.miniApp.fileName) : target);
 
     let saved = null;
-    const shouldSave = Boolean(action.html || action.promote || (found?.ok && found.miniApp.kind === "page"));
+    // Opening only shows what was found: it never saves, so it cannot promote a page or overwrite a file.
+    const shouldSave = action.verb !== "open_mini_app" && Boolean(action.html || action.promote || (found?.ok && found.miniApp.kind === "page"));
     if (shouldSave && miniAppHtml) {
       saved = saveMiniApp({
         appId: action.appId || action.id,

@@ -246,6 +246,14 @@ test("mini-app persistence and harness configure aliases in server.mjs", async (
   assert.equal(voiceOpen.result.ok, true);
   assert.equal(voiceOpen.result.miniApp.appId, "app_counter-widget");
   assert.equal(voiceOpen.result.miniApp.html, "<h1>v2</h1>", "opening never writes the app");
+  // Opening a plain workspace page shows it but never saves or promotes it.
+  writeFileSync(path.join(scratchRoot, "notes.html"), "<title>Notes Page</title><p>page</p>", "utf8");
+  const openPage = await turn({ verb: "open_mini_app", target: "notes.html" });
+  assert.equal(openPage.result.ok, true);
+  assert.equal(openPage.result.miniApp.kind, "page");
+  assert.equal(openPage.result.created, false);
+  const afterPage = await turn({ verb: "list_mini_apps" });
+  assert.deepEqual(afterPage.result.apps.map((a) => a.appId), ["app_counter-widget"], "opening a page did not promote it");
   const voiceMissing = await turn({ verb: "open_mini_app", target: "no such app" });
   assert.equal(voiceMissing.result.ok, false);
   assert.equal(voiceMissing.result.refused, "mini-app-not-found");
