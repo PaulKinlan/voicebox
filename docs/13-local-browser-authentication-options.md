@@ -23,6 +23,9 @@ Injecting an ephemeral session token into openly served HTML (for example, `<met
 
 To distinguish the authorized user's browser session from an unprivileged local process, the initial credential must be delivered out-of-band rather than embedded in unauthenticated HTML.
 
+### Frame-Level Limits Come Before Identity (TM-VB-WS-001/002)
+The loopback constraint above is about *who* may speak on a socket. There is a cheaper attack that never gets that far: saying something enormous. `/live` and `/channel` both decode RFC 6455 frames in `lib/ws-server.mjs`, and until `voicebox-beads-r93n` that decoder read a frame's declared length and then buffered until that many bytes arrived, checking the 4 MB message bound only afterwards. A peer could therefore send a ten-byte header declaring a terabyte, send nothing, and make the process accumulate whatever came — pre-authentication, because the hello/bearer gate runs after a frame is decoded. The bound is now enforced from the **declared length in the header**, before any payload is held, and the same header decides the RFC 6455 framing rules this server was silently accepting: client frames must be masked (§5.1), RSV1-3 must be zero (§5.2, no extension is negotiated), control frames are never fragmented and carry at most 125 bytes (§5.5), reserved opcodes and non-minimal length encodings are protocol errors (1002), and an oversized claim closes with 1009. A refusal from the header costs a peer ten bytes and costs this process nothing.
+
 ---
 
 ## 2. Architectural Options Evaluated
