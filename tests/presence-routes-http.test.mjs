@@ -10,7 +10,7 @@ let server;
 let scratch;
 test.before(async () => {
   scratch = mkdtempSync(path.join(os.tmpdir(), "vb-presence-http-"));
-  server = await startServer({ env: { VOICEBOX_WORKSPACE: scratch, VOICEBOX_LOOPBACK_AUTH: undefined } });
+  server = await startServer({ env: { VOICEBOX_WORKSPACE: scratch, VOICEBOX_LOOPBACK_AUTH: "0" } });
 });
 test.after(async () => { await server?.stop(); if (scratch) rmSync(scratch, { recursive: true, force: true }); });
 

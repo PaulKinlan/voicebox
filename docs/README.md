@@ -35,7 +35,7 @@ Voicebox enforces capability boundaries through host-held credentials, explicit 
 | [`13-local-browser-authentication-options.md`](13-local-browser-authentication-options.md) | **Loopback Authentication Analysis** | Security evaluation of local browser authentication models (Origin validation, bootstrap tickets, and WebCrypto pairing). |
 | [`14-s3-l2-bridge-decision.md`](14-s3-l2-bridge-decision.md) | **Sandbox Network Architecture Decision** | Architectural rationale for keeping interactive voice servers at L1.5 (shared network for cloud model WebSockets) while reserving `--unshare-net` for offline batch tasks. |
 | [`15-sandbox.md`](15-sandbox.md) | **Environment Sandboxing & Probes** | How L1 (`tools/fence.sh`) and L1.5 (`tools/fence-unit.sh`) sandboxes bound filesystems and processes, how `GET /api/probe` measures boundaries, and how `/exec` runs. |
-| [`18-loopback-session-auth.md`](18-loopback-session-auth.md) | **Loopback Session Gate (`VOICEBOX_LOOPBACK_AUTH=1`)** | Opt-in single-use bootstrap ticket (`?bootstrap=`) and `HttpOnly` session cookie protection for local HTTP and WebSocket endpoints. |
+| [`18-loopback-session-auth.md`](18-loopback-session-auth.md) | **Loopback Session Gate (on by default)** | Single-use bootstrap ticket (`?bootstrap=`) and `HttpOnly` session cookie protection for local HTTP and WebSocket endpoints. |
 
 ---
 

@@ -1,36 +1,30 @@
-# Loopback Session Gate (`VOICEBOX_LOOPBACK_AUTH=1`)
+# Loopback Session Gate (on by default; `VOICEBOX_LOOPBACK_AUTH=0` turns it off)
 
-`VOICEBOX_LOOPBACK_AUTH=1` enables an opt-in bootstrap ticket and `HttpOnly` session cookie gate on `server.mjs` and `vite.config.js` (implementing Option A from [`13-local-browser-authentication-options.md`](13-local-browser-authentication-options.md)).
+The loopback session gate is a bootstrap ticket and `HttpOnly` session cookie on `server.mjs` and `vite.config.js` (Option A from [`13-local-browser-authentication-options.md`](13-local-browser-authentication-options.md)). It is **on by default** since 2026-11-12.
 
-While the default loopback `Origin` check blocks Cross-Site WebSocket Hijacking (CSWSH) from external websites, enabling `VOICEBOX_LOOPBACK_AUTH=1` additionally blocks unauthenticated local processes (such as other OS users or unprivileged containers sharing the loopback network) from accessing the web UI, REST APIs, `/channel`, or `/live`.
+The loopback `Origin` check blocks Cross-Site WebSocket Hijacking from external websites, and the Host allowlist (`lib/request-host.mjs`) blocks DNS rebinding. Neither stops a **local process**, which can write any header on raw loopback TCP. The gate does: without the session cookie or the host token, nothing but `GET /api/health` and the bootstrap door answers.
 
 ---
 
-## 0. Default Posture: Gate OFF (accepted testing posture, owner ruling 2026-10-06)
+## 0. Default Posture: Gate ON (owner decision 2026-11-12)
 
-The gate is **OFF by default**, and the owner has ruled it stays that way for testing (voicebox-beads-k74h). The default is accepted, not silent:
+This replaces the 2026-10-06 ruling (voicebox-beads-k74h) that kept the gate off by default for testing. The reason for the change (voicebox-beads-9jhd, voicebox-beads-zqsr): with the gate off, any process on the machine could run commands through `POST /api/exec`, `POST /api/delegate` or a typed turn, and no credential the page holds could stop it, because the room's own session token is served in the page.
 
-- **Startup warning.** When `VOICEBOX_LOOPBACK_AUTH` is not `1` (unset or disabled), `server.mjs` prints a warning at startup naming the exposure and the flag remedy.
-- **Local-process risk with the gate off.** Any local process can forge `Origin` and `Sec-Fetch-Site` on raw loopback TCP and reach uncredentialed mutation routes, including workspace writes, environment registration and command execution. That risk is distinct from cross-site browser requests, which the JSON body door and the scoped request-level guard now refuse (voicebox-beads-1la5, voicebox-beads-3bwx); neither browser signal authenticates a local process. A browser old enough to omit both `Origin` and Fetch Metadata on a cross-site GET cannot be distinguished from a machine caller at the probe seam.
-- **Verified gate-on behaviour.** With `VOICEBOX_LOOPBACK_AUTH=1`, an unauthenticated HTTP request is refused with `401` (`loopback-unauthenticated`) before any route answers (WebSocket upgrades are refused too, under their own names — §1 item 6). The exemptions are the wall's own self-authorising checks (§1, "HTTP & API Wall"): `GET /api/health` remains `200` for supervisors and readiness checks (it exposes no file contents and no credential, though it does report the declared root and project name), and the bootstrap door, the `?bootstrap=` page, and host-token requests pass on their own authority. This is pinned by `tests/loopback-auth.test.mjs`. On the Vite front, a healthy `/api/health` keeps the server indicator up even when `/api/root` returns `401`; the page names the missing session and asks for a bootstrap ticket on that front's origin rather than claiming the server is offline (`tests/health-auth-browser.test.mjs`).
-- **Browser request guard (measured).** A cross-site *simple* POST cannot declare JSON without a preflight, so JSON-body routes refuse absent/non-JSON `Content-Type` with `415`; `OPTIONS` receives no CORS grant. Before dispatch, bodyless `POST /api/undo`, `POST /api/probe`, bespoke-parser `POST /api/mini-app/tools`, and even cache-miss/refresh `GET /api/probe` refuse a cross-site browser request with `403 cross-origin-request-refused` and no side effect. The guard checks `Sec-Fetch-Site` as well as `Origin`: Vite also stamps the incoming browser Origin in `x-voicebox-proxied-origin` before rewriting it, and the guard refuses a mismatch against the browser-addressed Host. This prevents the dev front laundering older-browser POSTs without Fetch Metadata; a matching pair grants no authority. The check is scoped to HTTP and does not change the separate WebSocket proxy hops. Same-origin page, Vite-proxied page and unheaded machine clients remain functional (focused `tests/csrf-http.test.mjs` and a real-browser two-origin drive). A pre-Fetch-Metadata cross-site GET carrying neither header remains indistinguishable from a machine call.
-- **Recommendation.** Run with `VOICEBOX_LOOPBACK_AUTH=1` outside local testing — the gate-off default exists for the raw command-line testing workflow, and the flag is one restart away.
-
-Enabling the gate is one restart away:
-
-```bash
-VOICEBOX_LOOPBACK_AUTH=1 npm start
-```
+- **Launch.** `npm start` prints a one-time `bootstrap` link. Open it. A plain visit to the address answers `401` with a short page that says to open the link from the terminal; it carries no ticket and no token.
+- **Restarts keep you signed in.** The session secret is kept in the host directory as `.loopback-session`, mode `0600`, served by no route. That is the same custody as `.host-token`, which already passes the wall, so a reader of that directory gains nothing new. Delete the file and restart to sign every browser out.
+- **Opting out.** `VOICEBOX_LOOPBACK_AUTH=0` turns the gate off, exactly that value; anything else leaves it on. The server then prints a startup warning naming the exposure. The test harness (`tests/lib/server.mjs`) sets it, because the suites drive the server as a raw command-line client.
+- **Gate-off risk.** Any local process can forge `Origin` and `Sec-Fetch-Site` and reach uncredentialed mutation routes, including workspace writes, environment registration and command execution. Cross-site browser requests are refused either way by the JSON body door and the request-level guard (voicebox-beads-1la5, voicebox-beads-3bwx).
+- **Verified gate-on behaviour.** An unauthenticated HTTP request is refused with `401` (`loopback-unauthenticated`) before any route answers (WebSocket upgrades are refused too, under their own names — §1 item 6). The exemptions are the wall's own self-authorising checks (§1, "HTTP & API Wall"): `GET /api/health` remains `200` for supervisors and readiness checks, and the bootstrap door, the `?bootstrap=` page, and host-token requests pass on their own authority. Pinned by `tests/loopback-auth.test.mjs`. On the Vite front, a healthy `/api/health` keeps the server indicator up even when `/api/root` returns `401`; the page names the missing session and asks for a bootstrap ticket on that front's origin (`tests/health-auth-browser.test.mjs`).
 
 ---
 
 ## 1. How the Loopback Session Gate Works
 
 ```bash
-VOICEBOX_LOOPBACK_AUTH=1 npm start
+npm start
 ```
 
-1. **In-Memory Session Secret**: At startup, `server.mjs` generates a random session secret held solely in process memory. Restarting the server invalidates prior session cookies.
+1. **Session Secret**: At first start, `server.mjs` generates a random session secret and keeps it `0600` in the host directory (`.loopback-session`). Later starts reuse it, so a restart does not invalidate session cookies; deleting the file does.
 2. **One-Time Bootstrap Ticket**: On boot, the server mints **one** single-use 64-character hex ticket and prints its URL to stdout:
    ```
    bootstrap  http://127.0.0.1:8787/?bootstrap=<64-hex-ticket>
@@ -54,7 +48,7 @@ VOICEBOX_LOOPBACK_AUTH=1 npm start
      ```
    - The response is unchanged in shape: `url`, naming this server's origin, carrying one fresh single-use ticket. Redeeming it from the dev front means swapping the host in that URL (§2) — the fix for the reported symptom is guidance about the host, not a second credential (voicebox-beads-t43w).
 6. **WebSocket Upgrade Protection (`/channel` & `/live`)**:
-   - When `VOICEBOX_LOOPBACK_AUTH=1` is active, local same-origin WebSocket upgrades must present **both** a loopback `Origin` header and a valid `vb_session` cookie (`browser/acts.ts` sends the cookie automatically on same-origin upgrades).
+   - When the gate is on, local same-origin WebSocket upgrades must present **both** a loopback `Origin` header and a valid `vb_session` cookie (`browser/acts.ts` sends the cookie automatically on same-origin upgrades).
    - Local processes that forge `Origin: http://127.0.0.1:8787` without the cookie fall through to the remote pairing-bearer check and fail with `executor-unauthenticated` (`/channel`) or `unauthenticated-call` (`/live`). Paired remote peers authenticating via `{"type":"hello","bearer":"vbx_..."}` continue to work unchanged.
 
 ---
@@ -67,7 +61,7 @@ When running `npm run dev` (`localhost:5173` fronting `127.0.0.1:8787`), the `lo
 
 ## 3. Summary of Protected Surfaces
 
-| Caller / Scenario | Gate Off (Default) | Gate On (`VOICEBOX_LOOPBACK_AUTH=1`) |
+| Caller / Scenario | Gate Off (`VOICEBOX_LOOPBACK_AUTH=0`) | Gate On (default) |
 |---|---|---|
 | External website in browser (CSWSH) | Blocked (`Origin` check) | Blocked (`Origin` + `SameSite=Strict` cookie) |
 | Local script with forged `Origin` (no ticket/token) | Allowed on loopback | **Refused** (`401` / WS `1008`) |

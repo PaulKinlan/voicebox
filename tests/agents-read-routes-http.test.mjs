@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { startServer } from "./lib/server.mjs";
 
 test("agents GET stays live and filtered while the separate privileged POST and exact 404s remain host-owned", async () => {
-  const server = await startServer({ env: { VOICEBOX_LOOPBACK_AUTH: undefined, VOICEBOX_HARNESS: undefined } });
+  const server = await startServer({ env: { VOICEBOX_LOOPBACK_AUTH: "0", VOICEBOX_HARNESS: undefined } });
   try {
     const get = async (query = "") => {
       const response = await fetch(server.base + "/api/agents" + query);

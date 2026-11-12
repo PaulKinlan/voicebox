@@ -55,7 +55,7 @@ Established by tools such as Jupyter Notebook and VS Code Server (`code-server`)
 
 ## 4. Decision & Implementation
 
-Voicebox implements **Option A (Host-Token Bootstrap Ticket)** as an opt-in security gate (`VOICEBOX_LOOPBACK_AUTH=1`), while keeping the zero-friction `Origin`-validated baseline as the default for single-user workstations:
+Voicebox implements **Option A (Host-Token Bootstrap Ticket)**. It began as an opt-in gate (`VOICEBOX_LOOPBACK_AUTH=1`) and has been **on by default since 2026-11-12**; `VOICEBOX_LOOPBACK_AUTH=0` restores the `Origin`-validated baseline for local testing (see [`18-loopback-session-auth.md`](18-loopback-session-auth.md) §0):
 1. **Consistent Authority Model**: Reuses the existing `0600` `.host-token` boundary already used for `/api/root`, `/api/pair`, and extension admission.
 2. **Multi-User & Container Isolation**: Prevents other OS accounts or unprivileged containers sharing loopback from accessing the server or WebSocket endpoints.
 3. **Full Implementation Details**: See [`18-loopback-session-auth.md`](18-loopback-session-auth.md) and `tests/loopback-auth.test.mjs`.
