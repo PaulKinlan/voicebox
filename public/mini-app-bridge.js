@@ -4,12 +4,15 @@
 //   - Hosted on same origin as Voicebox (http://127.0.0.1:8787).
 //   - Communicates with Host Room strictly verifying event.origin === window.location.origin.
 //   - Embeds the untrusted app inside an inner iframe strictly configured with sandbox="allow-scripts" (opaque origin).
-//   - The fetch relay's gate is public/relay-target.mjs: a target is admitted only when it RESOLVES to this page's
-//     origin (voicebox-beads-zus7), never by a string prefix.
+//   - The fetch relay has two gates. public/relay-target.mjs admits a target only when it RESOLVES to this
+//     page's origin (voicebox-beads-zus7), never by a string prefix; public/relay-policy.mjs then decides WHAT
+//     may be carried: approved reads are relayed, a host MUTATION is never fetched here at all — it goes to the
+//     room as `host_action_request` and only a person's approval makes it happen (voicebox-beads-j6im).
 //   - Mediates tool declarations, capability limits (64KB max, 5s timeout), and Web MCP execution over MessagePort.
 
 import { relayTarget } from "./relay-target.mjs";
 import { relayBody } from "./relay-body.mjs";
+import { relayPolicy } from "./relay-policy.mjs";
 
 const inner = document.getElementById("inner-app");
 let currentAppId = null;
@@ -18,6 +21,9 @@ let appChannelTransferred = false;
 let roomPort = null;
 const registeredTools = new Map();
 const pendingCalls = new Map();
+// Host actions (voicebox-beads-j6im): requests the room performs on the app's behalf after a person approves
+// them. Each is waiting on an answer from the room, correlated by the relay's own callId.
+const pendingHostActions = new Map();
 
 try {
   const urlParams = new URLSearchParams(window.location.search);
@@ -38,6 +44,21 @@ const BOUNDS = {
   // The fetch relay (voicebox-beads-v1k6): buffered whole, bounded, same-origin paths only.
   fetchRelayTimeoutMs: 30000,
   fetchRelayMaxBodyBytes: 262144,
+  // A host action is TWO waits, not one (voicebox-beads-a96w). The first waits for a PERSON to answer the
+  // room's prompt, and while it runs nothing has been dispatched — so its expiry may honestly say "nothing was
+  // sent". The second starts only when the room reports it has dispatched the request, and from that moment the
+  // mutation may already have been applied, so its expiry must say so instead. One clock covering both was the
+  // finding: it could expire during the room's own fetch and tell the app nothing was sent after a branch had
+  // landed. The fetch underneath keeps the 30s bound above; these are human/deferred waits, so minutes.
+  // STRICTLY LONGER than the room's own consent prompt (public/components/mini-app-surface.mjs,
+  // HOST_ACTION_CONSENT_MS = 120 s). This is not decoration (voicebox-beads-a96w, round 2): the room renders the
+  // bar after a round trip, so ITS 120 s always expires slightly AFTER this one would have. When both were 120 s,
+  // this clock could give up first — "nothing was sent" — while the room's bar was still on screen and still
+  // clickable, so a person pressing Allow a moment later performed the mutation anyway. Outwaiting the room is what
+  // makes "the prompt expired" true when this clock fires; the cancel below makes the room stop even if it somehow
+  // outlives us.
+  hostActionConsentMs: 180000,
+  hostActionFetchMs: 180000,
 };
 
 const INJECTED_SDK = `<script>
@@ -94,6 +115,14 @@ const INJECTED_SDK = `<script>
   // a bodyless request the app did not ask for.
   var RELAY_BODY_LIMIT = ${BOUNDS.maxArgsBytes};
   var relayBody = (${String(relayBody)});
+  // The relay POLICY, embedded from the bridge's own module (public/relay-policy.mjs, voicebox-beads-j6im):
+  // what may be carried at all, and whether a request is a read or a host mutation. The frame refuses here
+  // so the app hears the reason immediately; the bridge re-classifies and that copy is the boundary.
+  var relayPolicy = (${String(relayPolicy)});
+  // The frame's own backstop, deliberately LONGER than the bridge's two phases together: the bridge always
+  // answers first, and this one exists only for a relay that stopped answering — so it must not claim the
+  // request was never sent (voicebox-beads-a96w).
+  var HOST_ACTION_WAIT_MS = ${BOUNDS.hostActionConsentMs + BOUNDS.hostActionFetchMs + 30000};
   window.fetch = function(input, init) {
     var url = typeof input === "string" ? input : (input && input.url) || "";
     // A Request carries its own method, headers and body, and its .url is always ABSOLUTE — so the old relay
@@ -109,6 +138,10 @@ const INJECTED_SDK = `<script>
       return nativeFetch(input, init);
     }
     var method = String((init && init.method) || "GET").toUpperCase();
+    var policy = relayPolicy(method, target.pathname);
+    if (!policy.ok) {
+      return Promise.reject(new Error("fetch relay refuses this request: " + policy.why));
+    }
     var carried = relayBody(init && init.body, { maxBytes: RELAY_BODY_LIMIT });
     if (!carried.ok) {
       return Promise.reject(new Error("fetch relay refuses this request: " + carried.error));
@@ -126,9 +159,16 @@ const INJECTED_SDK = `<script>
     }
     return new Promise(function(resolve, reject) {
       var callId = "fetch-" + (++fetchSeq);
+      // A host action waits on a person and then on the room's own request, so it gets the longer backstop; a
+      // read is waiting on a socket and keeps the short one.
+      var waitMs = policy.kind === "host-action" ? HOST_ACTION_WAIT_MS : FETCH_RELAY_TIMEOUT_MS;
       var timer = setTimeout(function() {
-        if (pendingFetches.delete(callId)) reject(new Error("fetch relay timed out after " + FETCH_RELAY_TIMEOUT_MS + "ms"));
-      }, FETCH_RELAY_TIMEOUT_MS);
+        if (pendingFetches.delete(callId)) {
+          reject(new Error(policy.kind === "host-action"
+            ? "the relay stopped answering this host action; its outcome is UNKNOWN — check the room before retrying"
+            : "fetch relay timed out after " + FETCH_RELAY_TIMEOUT_MS + "ms"));
+        }
+      }, waitMs);
       pendingFetches.set(callId, { resolve: resolve, reject: reject, timer: timer });
       postToBridge({
         type: "fetch_request",
@@ -933,6 +973,61 @@ function validateToolArgs(params, rawArgs) {
 // the sandboxed app must not be able to mint Cookie/Authorization headers through the relay; the
 // page's own same-origin credentials ride the request as they would for the room itself. The body
 // is buffered whole and capped.
+// A host action, asked of the room and awaited (voicebox-beads-j6im). The bridge does NOT fetch these: the
+// app never gets the room's Origin, and the room performs the request itself only when a person approves it.
+//
+// TWO WAITS, BECAUSE THE TRUTH CHANGES BETWEEN THEM (voicebox-beads-a96w). Until the room reports that it has
+// dispatched the request, nothing has been sent, so a timeout may say exactly that. Once the room reports
+// `host_action_state: executing`, the request is out — the mutation may land, and may already have landed — so a
+// timeout there must be INDETERMINATE rather than a cheerful "nothing was sent". One clock for both phases was
+// the finding: it started before consent, so a slow operator plus the room's own fetch could exhaust it and the
+// app was told nothing had been sent after a branch had been merged.
+function awaitHostAction(request) {
+  return new Promise((resolve) => {
+    const pending = { resolve, timer: null, phase: "consent" };
+    const rearm = (ms, onExpire) => {
+      clearTimeout(pending.timer);
+      pending.timer = setTimeout(() => {
+        pendingHostActions.delete(request.callId);
+        onExpire();
+      }, ms);
+    };
+    pending.executing = () => {
+      if (pending.phase !== "consent") return;
+      pending.phase = "executing";
+      rearm(BOUNDS.hostActionFetchMs, () => resolve({
+        ok: false,
+        indeterminate: true,
+        refused: "host-action-unanswered",
+        error: "the room approved this host action and has begun performing it, but its answer did not arrive within "
+          + BOUNDS.hostActionFetchMs + "ms; it may have been applied — check before retrying",
+      }));
+    };
+    rearm(BOUNDS.hostActionConsentMs, () => {
+      // Tell the room to drop the prompt BEFORE answering the app (voicebox-beads-a96w, round 2): a bar that
+      // outlives this clock is a bar whose Allow would perform a request the app has just been told was never sent.
+      postToHost({ type: "host_action_cancel", callId: request.callId, reason: "the relay gave up waiting for an answer" });
+      resolve({
+        ok: false,
+        refused: "host-action-no-operator",
+        error: "the room's approval prompt expired without an answer; nothing was sent",
+      });
+    });
+    pendingHostActions.set(request.callId, pending);
+    postToHost({
+      type: "host_action_request",
+      callId: request.callId,
+      appId: currentAppId,
+      action: request.action,
+      route: request.route,
+      method: request.method,
+      path: request.path,
+      contentType: request.contentType,
+      body: request.body,
+    });
+  });
+}
+
 async function handleFetchRelay(data) {
   const { callId } = data;
   const reply = (msg) => {
@@ -950,8 +1045,13 @@ async function handleFetchRelay(data) {
     return;
   }
   const method = String(data.method || "GET").toUpperCase();
-  if (!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"].includes(method)) {
-    reply({ ok: false, error: `method not relayable: ${method}` });
+  // WHAT THIS REQUEST MAY DO (voicebox-beads-j6im). Same-origin was never the whole question: the relay used to
+  // hand an opaque-origin frame the room page's authority, so `POST /api/branches/merge` from app code landed a
+  // branch into the repository. The policy names the reads this surface may perform and refuses the rest; a
+  // host mutation is not fetched here at all.
+  const policy = relayPolicy(method, target.pathname);
+  if (!policy.ok) {
+    reply({ ok: false, error: `the fetch relay refused (${policy.refused}): ${policy.why}` });
     return;
   }
   const headers = {};
@@ -963,6 +1063,33 @@ async function handleFetchRelay(data) {
   const carried = method === "GET" || method === "HEAD" ? { ok: true } : relayBody(data.body, { maxBytes: BOUNDS.maxArgsBytes });
   if (!carried.ok) {
     reply({ ok: false, error: `fetch relay refuses this request: ${carried.error}` });
+    return;
+  }
+  if (policy.kind === "host-action") {
+    const answer = await awaitHostAction({
+      callId,
+      action: policy.action,
+      route: policy.route,
+      method,
+      path: target.pathname + target.search,
+      contentType: headers["content-type"],
+      // The body AS IT ARRIVED on the port, not this side's rebuilt copy (voicebox-beads-j6im): a FormData body
+      // is rebuilt into a real FormData here, and a FormData cannot be structured-cloned to the room. What the
+      // frame sent is cloneable by construction, and the room rebuilds it with the same relayBody.
+      body: data.body,
+    });
+    if (!answer || answer.ok !== true) {
+      // `indeterminate` crosses to the frame so an app can tell "the room refused" from "the room may have done
+      // it and could not tell me" (voicebox-beads-a96w). Collapsing the two was the whole defect.
+      reply({ ok: false, indeterminate: answer?.indeterminate === true, refused: answer?.refused, error: answer?.error || "the room refused this host action" });
+      return;
+    }
+    reply({
+      ok: true,
+      status: answer.status,
+      headers: answer.headers || { "content-type": "application/json" },
+      bodyText: String(answer.bodyText ?? ""),
+    });
     return;
   }
   const controller = new AbortController();
@@ -1095,7 +1222,18 @@ function dispatchCallTool(data) {
   }
   const cleanArgs = valid.value;
 
-  const timer = setTimeout(() => {
+  // THE TOOL BUDGET DOES NOT RUN WHILE A PERSON IS DECIDING (voicebox-beads-j6im). This budget bounds APP
+  // code, and a tool that asks the room for a host action is waiting on a human — the bridge's 5s bound would
+  // otherwise refuse every consented landing from the voice path ("land feat/x" → consent prompt → answer),
+  // which is the path the whole change exists to keep honest rather than to remove. The waiting is still
+  // bounded: the host action itself has two bounds (consent, then fetch: voicebox-beads-a96w), ONE pending at a time,
+  // and the prompt is answered by a click, so this cannot be used to buy unbounded time.
+  const entry = { timer: null, resolve: () => clearTimeout(entry.timer) };
+  const armCallTimer = () => setTimeout(() => {
+    if (pendingHostActions.size > 0) {
+      entry.timer = armCallTimer();
+      return;
+    }
     pendingCalls.delete(callId);
     postToHost({
       type: "tool_result",
@@ -1105,13 +1243,8 @@ function dispatchCallTool(data) {
       error: `tool execution timed out after ${BOUNDS.callTimeoutMs}ms`,
     });
   }, BOUNDS.callTimeoutMs);
-
-  pendingCalls.set(callId, {
-    timer,
-    resolve: () => {
-      clearTimeout(timer);
-    },
-  });
+  entry.timer = armCallTimer();
+  pendingCalls.set(callId, entry);
 
   appChannel.port1.postMessage({
     type: "call_tool",
@@ -1195,6 +1328,19 @@ window.addEventListener("message", (event) => {
         inner.srcdoc = injectSdkIntoHtml(rawHtml);
       } else if (msg.type === "call_tool") {
         dispatchCallTool(msg);
+      } else if (msg.type === "host_action_state") {
+        // The room has DISPATCHED the request (voicebox-beads-a96w). From here the wait is for an answer, not for
+        // a person, so the clock that may say "nothing was sent" is retired and the indeterminate one armed.
+        pendingHostActions.get(msg.callId)?.executing?.();
+      } else if (msg.type === "host_action_result") {
+        // The room's answer to a host action (voicebox-beads-j6im): approval and the route's own response, or a
+        // named refusal. Nothing reaches the server until this arrives.
+        const pending = pendingHostActions.get(msg.callId);
+        if (pending) {
+          pendingHostActions.delete(msg.callId);
+          clearTimeout(pending.timer);
+          pending.resolve(msg);
+        }
       }
     };
     return;
