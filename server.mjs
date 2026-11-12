@@ -71,7 +71,7 @@ import { liveToolDeclarations } from "./lib/wasm-shelf.mjs";
 import { redactSecrets, redactObject } from "./lib/redact.mjs";
 import { timingSafeStringEqual } from "./lib/timing-safe.mjs";
 import { MiniAppRegistry, validateMiniAppToolArgs } from "./lib/mini-app-host.mjs";
-import { saveMiniApp, getMiniApp } from "./lib/mini-app-store.mjs";
+import { saveMiniApp, getMiniApp, discoverMiniApps } from "./lib/mini-app-store.mjs";
 import { createClaudeAcpExecutor, describeClaudeAdapterInstall, CLAUDE_ACP_TIMEOUT_CEILING_MS } from "./lib/claude-acp.mjs";
 import {
   createAntigravityExecutor,
@@ -2817,7 +2817,24 @@ async function execute(action) {
   if (action.verb === "tool") {
     return callTool(action.name, action.args ?? {});
   }
-  if (action.verb === "mini_app" || action.verb === "launch_mini_app") {
+  // The saved apps, as the Home card lists them (`GET /api/mini-apps?kind=app`), for the voice.
+  if (action.verb === "list_mini_apps") {
+    const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
+    const apps = (discoverMiniApps({ rootPath }).miniApps ?? [])
+      .filter((a) => (a.kind ?? "app") === "app")
+      .map(({ appId, title, fileName, source }) => ({ appId, title, fileName, source }));
+    return {
+      ok: true,
+      action: apps.length
+        ? `${apps.length} saved mini-app${apps.length === 1 ? "" : "s"}: ${apps.map((a) => a.title).join(", ")}`
+        : "no saved mini-apps",
+      apps,
+      count: apps.length,
+      root: active?.root ?? null,
+    };
+  }
+  if (action.verb === "mini_app" || action.verb === "launch_mini_app" || action.verb === "open_mini_app") {
+    if (action.verb === "open_mini_app") action = { verb: "open_mini_app", target: action.target };
     const rootPath = active?.root?.kind === "machine" ? active.root.path : WORKSPACE;
     const target = (action.target || action.fileName || action.name || "").trim();
     let found = null;
@@ -2829,7 +2846,8 @@ async function execute(action) {
     const miniAppFileName = action.fileName || (found?.ok ? path.basename(found.miniApp.fileName) : target);
 
     let saved = null;
-    const shouldSave = Boolean(action.html || action.promote || (found?.ok && found.miniApp.kind === "page"));
+    // Opening only shows what was found: it never saves, so it cannot promote a page or overwrite a file.
+    const shouldSave = action.verb !== "open_mini_app" && Boolean(action.html || action.promote || (found?.ok && found.miniApp.kind === "page"));
     if (shouldSave && miniAppHtml) {
       saved = saveMiniApp({
         appId: action.appId || action.id,
@@ -5425,7 +5443,9 @@ server.on("upgrade", (req, socket) => {
             if (result?.miniApp) {
               try { ws.send(JSON.stringify({ type: "mini_app", miniApp: result.miniApp })); } catch {}
             }
-            responses.push({ id: call.id, name: call.name, response: { result } });
+            // The room gets the app's html (above); the model does not need a whole app back in its context.
+            const modelResult = result?.miniApp?.html ? { ...result, miniApp: { ...result.miniApp, html: undefined, storagePath: undefined } } : result;
+            responses.push({ id: call.id, name: call.name, response: { result: modelResult } });
             // The frame carries a BOUNDED slice of the result's output (e1m0's ri4k review):
             // execution status AND what the tool actually returned, so the room's tools view
             // and tests can verify the product's answer — not just that a call happened.
