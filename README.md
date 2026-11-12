@@ -323,6 +323,7 @@ to 5.76:1 and 6.45:1. Its 11 `light-dark()` colour tokens are a palette of their
 | `lib/routes/agents.mjs` | Agent registration and update HTTP endpoints (POST /api/agents, PATCH /api/agents/:id). |
 | `lib/routes/branches.mjs` | Candidate branch inspection, diff viewing, and landing endpoints. |
 | `lib/routes/changelog.mjs` | Repository commit history and changelog query endpoint (GET /api/changelog). |
+| `lib/routes/commands.mjs` | Direct command routes: undo, delegate, exec and task status (GET/POST /api/undo, POST /api/delegate, POST /api/exec, GET /api/task), each a thin door onto the host's one execute path. |
 | `lib/routes/doctor.mjs` | In-browser system diagnostics and environment health endpoint (GET /api/doctor). |
 | `lib/routes/extensions.mjs` | Extension proposal, registration, and catalogue HTTP endpoints. |
 | `lib/routes/fleet.mjs` | Public agent fleet discovery endpoint (GET /api/fleet). |
@@ -333,6 +334,7 @@ to 5.76:1 and 6.45:1. Its 11 `light-dark()` colour tokens are a palette of their
 | `lib/routes/permissions.mjs` | Pending permission requests and their resolution (GET /api/permissions/pending, POST /api/permissions/resolve). |
 | `lib/routes/presence.mjs` | Multi-participant room presence and floor control endpoints. |
 | `lib/routes/tool-catalog.mjs` | Tool catalog HTTP query endpoint (GET /api/tools). |
+| `lib/routes/transport.mjs` | Transport bundles: export the declared machine root as a bundle and import one into it (GET /api/transport/export, POST /api/transport/import), both the host's act. |
 | `lib/routes/workspace.mjs` | Workspace file reading, writing, and directory search endpoints. |
 <!-- END GENERATED ROUTE INVENTORY -->
 

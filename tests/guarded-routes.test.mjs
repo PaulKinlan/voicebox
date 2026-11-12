@@ -14,6 +14,8 @@ import { defineRoutes, createGuardedDispatcher, GUARDS, READ_METHODS } from "../
 import { createMiniAppRoutes } from "../lib/routes/mini-apps.mjs";
 import { createAgentRoutes } from "../lib/routes/agents.mjs";
 import { createPermissionRoutes } from "../lib/routes/permissions.mjs";
+import { createTransportRoutes } from "../lib/routes/transport.mjs";
+import { createCommandRoutes } from "../lib/routes/commands.mjs";
 
 const noop = () => {};
 
@@ -321,4 +323,100 @@ test("permissions: anyone behind the wall reads the queue, only the host token a
   const unnamed = agentHarness({ hostToken: true, body: null });
   await unnamed.call("POST", "/api/permissions/resolve");
   assert.deepEqual(unnamed.answers.map((a) => [a.code, a.body.refused]), [[400, "bad-request"]]);
+});
+
+// ── transport + commands (voicebox-beads-cwx5.1) ─────────────────────────────────────────────────────────────
+
+function commandHarness({ hostToken = false, crossOrigin = false, active = { root: { kind: "machine", path: "/w" } }, body = {} } = {}) {
+  const answers = [];
+  const calls = [];
+  const json = (_res, code, payload) => { answers.push({ code, body: payload }); };
+  const transportRoutes = createTransportRoutes({
+    getActive: () => active,
+    noRootDeclared: () => ({ ok: false, refused: "no-root-declared" }),
+    exportBundle: (dir, options) => { calls.push(["export", dir, options.files]); return { ok: true, bundle: { files: [] } }; },
+    importBundle: (dir, bundle, options) => { calls.push(["import", dir, options.overwrite]); return { ok: true, written: [] }; },
+    selfEnvironment: "env_self", json, contentJsonBodyMaxBytes: 1024,
+  });
+  const commandRoutes = createCommandRoutes({
+    execute: async (action) => { calls.push(["execute", action]); return action.command === "bad" ? { ok: false, refused: "no-root-declared" } : { ok: true }; },
+    getActive: () => active,
+    noRootDeclared: () => ({ ok: false, refused: "no-root-declared" }),
+    undoStackFor: () => [{ verb: "write", name: "a.txt", at: 1 }],
+    taskStatus: (address) => (address === "task_1" ? { ok: true, state: "done" } : { ok: false, refused: "unknown-task" }),
+    recordWorkActivity: (entry) => { calls.push(["activity", entry.summary]); },
+    json,
+  });
+  const dispatch = createGuardedDispatcher({
+    routes: [...transportRoutes, ...commandRoutes],
+    checks: { browserMutationRefused: () => crossOrigin, hostTokenOk: () => hostToken, hasAuthority: () => false, hasRoomAuthority: () => false },
+    json, readJsonBody: async () => body,
+  });
+  const call = (method, pathname, search = "") => dispatch({ method }, {}, { pathname, searchParams: new URLSearchParams(search) });
+  return { transportRoutes, commandRoutes, answers, calls, call };
+}
+
+test("transport + commands: every route's guard is declared, and this is the list", () => {
+  const { transportRoutes, commandRoutes } = commandHarness();
+  assert.deepEqual(
+    [...transportRoutes, ...commandRoutes].map((r) => [r.key, r.guard, r.body ?? null, r.refusal?.refused ?? null]),
+    [
+      ["GET /api/transport/export", "host-token", null, "host-token-required"],
+      ["POST /api/transport/import", "host-token", "json", "host-token-required"],
+      ["GET /api/undo", "read", null, null],
+      ["POST /api/undo", "csrf", null, null],
+      ["POST /api/delegate", "json", null, null],
+      ["POST /api/exec", "json", null, null],
+      ["GET /api/task", "read", null, null],
+    ],
+  );
+});
+
+test("transport: both directions take the host token before anything is read or written", async () => {
+  const page = commandHarness({ hostToken: false });
+  await page.call("GET", "/api/transport/export");
+  await page.call("POST", "/api/transport/import");
+  assert.deepEqual(page.answers.map((a) => [a.code, a.body.refused]), [[403, "host-token-required"], [403, "host-token-required"]]);
+  assert.deepEqual(page.calls, [], "a refused caller reaches neither the export nor the import");
+
+  const host = commandHarness({ hostToken: true, body: { bundle: { files: [] } } });
+  await host.call("GET", "/api/transport/export", "files=a.md,%20b.md");
+  await host.call("POST", "/api/transport/import");
+  assert.deepEqual(host.calls, [["export", "/w", ["a.md", "b.md"]], ["import", "/w", false]], "overwrite is false unless the caller says true");
+
+  const noRoot = commandHarness({ hostToken: true, active: null });
+  await noRoot.call("GET", "/api/transport/export");
+  assert.equal(noRoot.answers[0].body.refused, "no-root-declared");
+  const browserRoot = commandHarness({ hostToken: true, active: { root: { kind: "browser" } } });
+  await browserRoot.call("POST", "/api/transport/import");
+  assert.equal(browserRoot.answers[0].body.refused, "root-not-reachable-from-here");
+  assert.deepEqual(browserRoot.calls, []);
+});
+
+test("commands: undo refuses a cross-origin browser, and each door hands one verb to execute", async () => {
+  const hostile = commandHarness({ crossOrigin: true });
+  await hostile.call("POST", "/api/undo");
+  assert.equal(hostile.answers[0].code, 403);
+  assert.deepEqual(hostile.calls, [], "a cross-origin undo runs nothing");
+
+  const room = commandHarness({ body: { agent: "pi", task: "tidy", command: "ls", cwd: " src " } });
+  await room.call("GET", "/api/undo");
+  await room.call("POST", "/api/undo");
+  await room.call("POST", "/api/delegate");
+  await room.call("POST", "/api/exec");
+  await room.call("GET", "/api/task", "address=task_1");
+  await room.call("GET", "/api/task", "address=nope");
+  assert.deepEqual(room.answers.map((a) => a.code), [200, 200, 200, 200, 200, 404]);
+  assert.deepEqual(room.answers[0].body.last, { verb: "write", name: "a.txt", at: 1 });
+  assert.deepEqual(room.calls.map((c) => c[1]), [
+    { verb: "undo" },
+    { verb: "delegate_task", agent: "pi", task: "tidy" },
+    { verb: "exec", command: "ls", cwd: "src" },
+  ]);
+
+  // A refusal the executor did not itself record is recorded here, so the activity log still shows it.
+  const refused = commandHarness({ body: { command: "bad" } });
+  await refused.call("POST", "/api/exec");
+  assert.equal(refused.answers[0].code, 400);
+  assert.deepEqual(refused.calls.at(-1), ["activity", "exec: bad"]);
 });

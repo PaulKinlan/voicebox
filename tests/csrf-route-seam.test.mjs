@@ -52,19 +52,13 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = readFileSync(path.join(root, "server.mjs"), "utf8");
 
 // A new mutating route of ANY verb needs an explicit decision here, even if it plans to use the JSON door: the
-// reviewer must see the reason. The four csrf keys are also asserted against the host guard, and `authority` keys
+// reviewer must see the reason. The csrf keys are also asserted against the host guard, and `authority` keys
 // (`DELETE /api/environments/<param>`) are the routes that match their path into a
 // variable and gate on hasExtensionAuthority instead of on a body read.
 const decisions = new Map([
   ["POST /api/fleet/contact", "json"],
   ["POST /api/tasks/delegate", "json"],
   ["POST /api/root", "json"],
-  ["POST /api/undo", "csrf"],
-  ["POST /api/delegate", "json"],
-  ["POST /api/exec", "json"],
-  // voicebox-beads-3dma: writes files into the declared root from a caller-supplied bundle, so it is the host's
-  // act — the host token, not the JSON door alone.
-  ["POST /api/transport/import", "host-token"],
   ["POST /api/probe", "csrf"],
   ["POST /api/environments", "json"],
   ["POST /api/turn", "json"],
@@ -564,16 +558,18 @@ for (const { name, mutant, reason } of MUTANTS) {
 }
 
 test("lost guard or JSON door fails, while a harmless GET does not change the POST inventory", () => {
-  const unguarded = source.replace('key === "POST /api/undo"', 'key === "POST /api/unused"');
+  // Anchored on routes that are STILL inline in the host; the ones that moved into lib/routes declare their guard
+  // as data and are covered by tests/guarded-routes.test.mjs.
+  const unguarded = source.replace('key === "POST /api/probe"', 'key === "POST /api/unused"');
   assert.notEqual(unguarded, source, "the guard mutation must be applied");
-  assert.throws(() => assertPostBoundary(unguarded), /POST \/api\/undo: missing browser CSRF guard/);
+  assert.throws(() => assertPostBoundary(unguarded), /POST \/api\/probe: missing browser CSRF guard/);
 
   const noDoor = source.replace(
-    'if (req.method === "POST" && url.pathname === "/api/delegate") {\n    const body = await readJson();\n    const result = await execute({ verb: "delegate_task"',
-    'if (req.method === "POST" && url.pathname === "/api/delegate") {\n    const body = {};\n    const result = await execute({ verb: "delegate_task"',
+    "const body = await readJson(CONTENT_JSON_BODY_MAX_BYTES);\n    const envKey = typeof body?.envKey",
+    "const body = {};\n    const envKey = typeof body?.envKey",
   );
   assert.notEqual(noDoor, source, "the JSON-door mutation must be applied");
-  assert.throws(() => assertPostBoundary(noDoor), /POST \/api\/delegate: declared json but handler no longer calls its boundary/);
+  assert.throws(() => assertPostBoundary(noDoor), /POST \/api\/call: declared json but handler no longer calls its boundary/);
 
   // The control arm: a READ route changes nothing, so the seam is not simply allergic to edits.
   const read = source.replace(
