@@ -8,11 +8,16 @@
 //     page's origin (voicebox-beads-zus7), never by a string prefix; public/relay-policy.mjs then decides WHAT
 //     may be carried: approved reads are relayed, a host MUTATION is never fetched here at all — it goes to the
 //     room as `host_action_request` and only a person's approval makes it happen (voicebox-beads-j6im).
+//   - The app document runs under a default-deny network CSP (public/app-network-policy.mjs, voicebox-beads-cwx5.16):
+//     the policy is the first thing the document parses, it admits only the declared origins the room granted,
+//     and a blocked load is reported to the room by origin so the person sees why an app looks broken.
 //   - Mediates tool declarations, capability limits (64KB max, 5s timeout), and Web MCP execution over MessagePort.
 
 import { relayTarget } from "./relay-target.mjs";
 import { relayBody } from "./relay-body.mjs";
 import { relayPolicy } from "./relay-policy.mjs";
+import { applyNetworkPolicy, blockedOrigin } from "./app-network-policy.mjs";
+import { normalizeAppContext, normalizeAppMessage } from "./app-messages.mjs";
 
 const inner = document.getElementById("inner-app");
 let currentAppId = null;
@@ -214,6 +219,35 @@ const INJECTED_SDK = `<script>
           return;
         }
 
+        if (data.type === "register_result") {
+          const waiting = pendingRegistrations.get(data.regId);
+          if (waiting) {
+            pendingRegistrations.delete(data.regId);
+            if (data.ok) waiting.resolve(undefined);
+            else {
+              tools.delete(waiting.name);
+              waiting.reject(domError(data.error || "the host refused this tool", "InvalidStateError"));
+            }
+          }
+          return;
+        }
+
+        if (data.type === "app_message_result") {
+          const sent = pendingAppMessages.get(data.msgId);
+          if (sent) {
+            pendingAppMessages.delete(data.msgId);
+            if (data.ok) sent.resolve(undefined);
+            else sent.reject(new Error(data.error || "the room did not accept this message"));
+          }
+          return;
+        }
+
+        if (data.type === "cancel_tool") {
+          const running = activeCalls.get(data.callId);
+          if (running) running.abort(domError("the host cancelled this tool call", "AbortError"));
+          return;
+        }
+
         if (data.type === "call_tool") {
           const callId = data.callId;
           const name = data.name;
@@ -223,11 +257,16 @@ const INJECTED_SDK = `<script>
             bridgePort.postMessage({ type: "tool_result", callId: callId, ok: false, error: "tool not found: " + name });
             return;
           }
+          // WebMCP: execute(input, { signal }). The signal aborts when the host gives up on the call.
+          const controller = new AbortController();
+          activeCalls.set(callId, controller);
           try {
-            const result = await tool.execute(args || {});
-            bridgePort.postMessage({ type: "tool_result", callId: callId, ok: true, result: result });
+            const result = await tool.execute(args || {}, { signal: controller.signal });
+            bridgePort.postMessage({ type: "tool_result", callId: callId, ok: true, result: result === undefined ? null : result });
           } catch (err) {
             bridgePort.postMessage({ type: "tool_result", callId: callId, ok: false, error: err ? (err.message || String(err)) : "unknown error" });
+          } finally {
+            activeCalls.delete(callId);
           }
         }
       };
@@ -239,35 +278,119 @@ const INJECTED_SDK = `<script>
     }
   });
 
+  // THE TOOL API IS WEBMCP'S (voicebox-beads-cwx5.12). A Mini-App is a WebMCP page:
+  //
+  //   await document.modelContext.registerTool(
+  //     { name, description, inputSchema, execute(input, { signal }) { ... } },
+  //     { signal },            // abort it to unregister the tool
+  //   );
+  //
+  // The shape follows the WebMCP draft (https://webmachinelearning.github.io/webmcp/): registerTool returns a
+  // promise, a bad or duplicate tool REJECTS with InvalidStateError, the options signal unregisters, and execute
+  // receives its own abort signal. The promise settles on the HOST's answer, so a tool the bridge refuses (an
+  // unsupported schema keyword, the 16-tool cap) is a rejection the app can see, not a console warning.
+  //
+  // window.webMcp / window.voicebox are the older Voicebox names and keep their older behaviour: "parameters"
+  // instead of "inputSchema", a synchronous throw on a malformed tool, and a second registration replacing the
+  // first. Apps written against them keep working unchanged.
+  const pendingRegistrations = new Map();
+  const activeCalls = new Map();
+  let regSeq = 0;
+
+  function domError(message, name) {
+    try { return new DOMException(message, name); } catch (err) { const e = new Error(message); e.name = name; return e; }
+  }
+
+  function schemaOf(tool) {
+    return tool.inputSchema || tool.parameters || { type: "object", properties: {} };
+  }
+
+  function unregister(name, tool) {
+    if (tools.get(name) !== tool) return;
+    tools.delete(name);
+    postToBridge({ type: "unregister_tool", name: name });
+  }
+
+  function announce(tool, regId) {
+    postToBridge({
+      type: "register_tool",
+      regId: regId,
+      tool: { name: tool.name, description: tool.description || "", parameters: schemaOf(tool) }
+    });
+  }
+
+  const modelContext = {
+    registerTool: function(tool, options) {
+      const signal = options && options.signal;
+      if (!tool || typeof tool !== "object" || typeof tool.execute !== "function") {
+        return Promise.reject(new TypeError("registerTool needs a tool with an execute function"));
+      }
+      if (typeof tool.name !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(tool.name)) {
+        return Promise.reject(domError("a tool name is 1-128 characters of letters, digits, '_', '-' and '.'", "InvalidStateError"));
+      }
+      if (typeof tool.description !== "string" || !tool.description) {
+        return Promise.reject(domError("a tool needs a description", "InvalidStateError"));
+      }
+      if (tools.has(tool.name)) {
+        return Promise.reject(domError("a tool named '" + tool.name + "' is already registered", "InvalidStateError"));
+      }
+      if (signal && signal.aborted) return Promise.reject(signal.reason);
+      tools.set(tool.name, tool);
+      if (signal) signal.addEventListener("abort", function() { unregister(tool.name, tool); }, { once: true });
+      return new Promise(function(resolve, reject) {
+        const regId = "reg-" + (++regSeq);
+        pendingRegistrations.set(regId, { resolve: resolve, reject: reject, name: tool.name });
+        announce(tool, regId);
+      });
+    }
+  };
+
   window.webMcp = {
     registerTool: function(tool) {
       if (!tool || typeof tool.name !== "string" || typeof tool.execute !== "function") {
         throw new Error("tool must have string name and execute function");
       }
       tools.set(tool.name, tool);
-      postToBridge({
-        type: "register_tool",
-        tool: {
-          name: tool.name,
-          description: tool.description || "",
-          parameters: tool.parameters || { type: "object", properties: {} }
-        }
-      });
+      announce(tool);
     },
     ready: function() {
       postToBridge({ type: "app_ready" });
     }
   };
-  window.voicebox = window.webMcp;
-  try {
-    if (typeof navigator !== "undefined") {
-      if (!navigator.modelContext) {
-        Object.defineProperty(navigator, "modelContext", { value: window.webMcp, configurable: true });
-      } else if (typeof navigator.modelContext.registerTool !== "function") {
-        navigator.modelContext.registerTool = window.webMcp.registerTool;
+  // THE APP CAN SPEAK FIRST (public/app-messages.mjs). Both return a promise that settles on the room's answer:
+  // a rejection says why (too long, too many this minute, no live voice session).
+  const pendingAppMessages = new Map();
+  let appMessageSeq = 0;
+  function tellRoom(kind, value) {
+    return new Promise(function(resolve, reject) {
+      const msgId = "msg-" + (++appMessageSeq);
+      pendingAppMessages.set(msgId, { resolve: resolve, reject: reject });
+      try {
+        postToBridge({ type: "app_message", msgId: msgId, kind: kind, value: value });
+      } catch (err) {
+        pendingAppMessages.delete(msgId);
+        reject(new TypeError("this value cannot be sent to the host"));
       }
-    }
-  } catch (err) {}
+    });
+  }
+  window.webMcp.sendMessage = function(text) { return tellRoom("message", text); };
+  window.webMcp.updateModelContext = function(data) { return tellRoom("context", data); };
+  window.voicebox = window.webMcp;
+  // An OWN property on this document and this navigator, so it shadows a browser-native modelContext: a tool
+  // registered with the browser's own implementation would never reach the room. navigator.modelContext is the
+  // name earlier drafts used and is kept as an alias of the same object.
+  try { Object.defineProperty(document, "modelContext", { value: modelContext, configurable: true }); } catch (err) {}
+  try { Object.defineProperty(navigator, "modelContext", { value: modelContext, configurable: true }); } catch (err) {}
+
+  // A load the network policy blocked (voicebox-beads-cwx5.16). Without this an app that needs an undeclared
+  // origin just looks broken; the bridge passes the ORIGIN on so the room can say which declaration is missing.
+  document.addEventListener("securitypolicyviolation", function(event) {
+    postToBridge({
+      type: "csp_violation",
+      blockedURI: String(event.blockedURI || "").slice(0, 512),
+      directive: String(event.effectiveDirective || event.violatedDirective || "").slice(0, 64)
+    });
+  });
 
   // Signal to the outer mediator that inner frame script is loaded and ready for port transfer
   if (window.parent && window.parent !== window) {
@@ -1124,22 +1247,68 @@ function handleInnerMessage(event) {
     return;
   }
 
+  if (data.type === "app_message") {
+    // An app speaking to the model (voicebox-beads-cwx5.12). Shape and size are checked here so nothing
+    // oversized crosses to the room; the budget, the framing and the delivery are the room's.
+    const msgId = typeof data.msgId === "string" ? data.msgId.slice(0, 64) : "";
+    if (!msgId) return;
+    const refuse = (error) => appChannel?.port1.postMessage({ type: "app_message_result", msgId, ok: false, error });
+    const kind = data.kind === "context" ? "context" : data.kind === "message" ? "message" : "";
+    if (!kind) return refuse("unknown message kind");
+    const checked = kind === "message" ? normalizeAppMessage(data.value) : normalizeAppContext(data.value);
+    if (!checked.ok) return refuse(checked.why);
+    postToHost({ type: "app_message", appId: currentAppId, msgId, kind, text: checked.text });
+    return;
+  }
+
+  if (data.type === "csp_violation") {
+    // Reported once per origin and bounded per load: app code chooses how often this fires.
+    const origin = blockedOrigin(data.blockedURI);
+    if (!origin || reportedBlocks.has(origin) || reportedBlocks.size >= MAX_REPORTED_BLOCKS) return;
+    reportedBlocks.add(origin);
+    postToHost({
+      type: "network_blocked",
+      appId: currentAppId,
+      origin,
+      directive: typeof data.directive === "string" ? data.directive.slice(0, 64) : "",
+    });
+    return;
+  }
+
   if (data.type === "register_tool") {
-    if (registeredTools.size >= BOUNDS.maxTools) {
+    // The app is told the outcome (voicebox-beads-cwx5.12): a WebMCP registerTool promise settles on it.
+    const answer = (ok, error) => {
+      if (typeof data.regId !== "string" || !appChannel) return;
+      appChannel.port1.postMessage({ type: "register_result", regId: data.regId.slice(0, 64), ok, ...(ok ? {} : { error }) });
+    };
+    const replacing = typeof data.tool?.name === "string" && registeredTools.has(data.tool.name.trim());
+    if (!replacing && registeredTools.size >= BOUNDS.maxTools) {
       console.warn(`[mini-app-bridge] max tools limit reached (${BOUNDS.maxTools}) for app ${currentAppId}`);
+      answer(false, `a Mini-App may register at most ${BOUNDS.maxTools} tools`);
       return;
     }
     const check = validateTool(data.tool);
     if (!check.ok) {
       console.warn(`[mini-app-bridge] rejected tool:`, check.error);
+      answer(false, check.error);
       return;
     }
     registeredTools.set(check.tool.name, check.tool);
+    answer(true);
     postToHost({
       type: "tools_updated",
       appId: currentAppId,
       tools: Array.from(registeredTools.values()),
     });
+  } else if (data.type === "unregister_tool") {
+    // WebMCP unregisters by aborting the signal given to registerTool.
+    if (typeof data.name === "string" && registeredTools.delete(data.name)) {
+      postToHost({
+        type: "tools_updated",
+        appId: currentAppId,
+        tools: Array.from(registeredTools.values()),
+      });
+    }
   } else if (data.type === "app_ready") {
     postToHost({
       type: "app_ready",
@@ -1235,6 +1404,8 @@ function dispatchCallTool(data) {
       return;
     }
     pendingCalls.delete(callId);
+    // Tell the app its call was abandoned: this aborts the signal its execute() was given.
+    appChannel?.port1.postMessage({ type: "cancel_tool", callId });
     postToHost({
       type: "tool_result",
       callId,
@@ -1254,10 +1425,23 @@ function dispatchCallTool(data) {
   });
 }
 
-function injectSdkIntoHtml(rawHtml) {
+/** Origins already reported as blocked for the app that is loaded now. */
+const reportedBlocks = new Set();
+const MAX_REPORTED_BLOCKS = 8;
+
+/**
+ * The document the inner frame parses: the network policy, then the SDK, then the app. The policy's placement
+ * and the narrowing of the room's `grant` to what the app declares are public/app-network-policy.mjs's.
+ */
+function injectSdkIntoHtml(rawHtml, grant) {
   const src = typeof rawHtml === "string" && rawHtml.trim()
     ? rawHtml
     : "<!doctype html><html><head></head><body></body></html>";
+  reportedBlocks.clear();
+  return applyNetworkPolicy(withSdk(src), grant, { hostOrigin: location.origin });
+}
+
+function withSdk(src) {
   const baseStyle = `<style id="voicebox-mini-app-base">html, body { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }</style>`;
   const payload = baseStyle + "\n" + INJECTED_SDK;
   const doctypeMatch = src.match(/^\s*<!doctype\s+[^>]*>/i);
@@ -1325,9 +1509,19 @@ window.addEventListener("message", (event) => {
         appChannelTransferred = false;
 
         const rawHtml = msg.html || "<!doctype html><html><body></body></html>";
-        inner.srcdoc = injectSdkIntoHtml(rawHtml);
+        inner.srcdoc = injectSdkIntoHtml(rawHtml, msg.network);
       } else if (msg.type === "call_tool") {
         dispatchCallTool(msg);
+      } else if (msg.type === "app_message_result") {
+        // The room's answer to an app message: passed back so the app's promise settles on it.
+        if (typeof msg.msgId === "string") {
+          appChannel?.port1.postMessage({
+            type: "app_message_result",
+            msgId: msg.msgId,
+            ok: msg.ok === true,
+            ...(msg.ok === true ? {} : { error: String(msg.error || "refused").slice(0, 300) }),
+          });
+        }
       } else if (msg.type === "host_action_state") {
         // The room has DISPATCHED the request (voicebox-beads-a96w). From here the wait is for an answer, not for
         // a person, so the clock that may say "nothing was sent" is retired and the indeterminate one armed.
@@ -1357,7 +1551,7 @@ window.addEventListener("message", (event) => {
 
     // Inject SDK while preserving Standards Mode doctype
     const rawHtml = data.html || "<!doctype html><html><body></body></html>";
-    inner.srcdoc = injectSdkIntoHtml(rawHtml);
+    inner.srcdoc = injectSdkIntoHtml(rawHtml, data.network);
   } else if (data.type === "call_tool") {
     dispatchCallTool(data);
   }

@@ -307,6 +307,7 @@ to 5.76:1 and 6.45:1. Its 11 `light-dark()` colour tokens are a palette of their
 | `public/components/environment-root-dialog.mjs` | Environments root configuration and project creation dialog. |
 | `public/components/harnesses-dialog.mjs` | Harness inventory, configuration, and task delegation dialog. |
 | `public/components/mic-hotkey-controller.mjs` | Configurable microphone push-to-talk and toggle hotkey controller. |
+| `public/components/mini-app-network.mjs` | The room's side of the Mini-App network policy: remembered approvals, the Allow/Keep offline prompt and the blocked-load notice. |
 | `public/components/mini-app-surface.mjs` | Interactive mini-app iframe bridge and container surface. |
 | `public/components/sync-toast.mjs` | Revision-mismatch notification toast and build stamp controller. |
 | `public/components/system-command-bus.mjs` | Declarative system command bus for feature command handlers, decoupled from public/fused.js. |

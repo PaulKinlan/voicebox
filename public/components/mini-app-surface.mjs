@@ -38,8 +38,15 @@
 // prompt naming the app, the action and the body preview. Only an Allow performs the fetch, with this page's
 // own authority, and the route's real status and bytes go back to the app. Deny, timeout or close answers a
 // named refusal and sends nothing.
+//
+// NETWORK ACCESS (voicebox-beads-cwx5.16): every app runs under a default-deny network policy. mount() asks
+// ./mini-app-network.mjs what this app declares and whether a person approved it, hands that grant to the
+// bridge with the app's html, and shows the Allow / Keep offline question when the app asks for origins nobody
+// has approved yet. A load the policy blocks comes back as `network_blocked` and is shown on the card.
 import { relayPolicy } from "../relay-policy.mjs";
 import { relayBody } from "../relay-body.mjs";
+import { createMiniAppNetwork } from "./mini-app-network.mjs";
+import { createMessageBudget, frameAppMessage, normalizeAppContext, normalizeAppMessage } from "../app-messages.mjs";
 
 export function initMiniAppHost({
   els,
@@ -53,6 +60,10 @@ export function initMiniAppHost({
   renderRead,
   sqehSyncMiniApps,
   launchedMiniApps,
+  // App-to-model messages (public/app-messages.mjs). `sendToModel(text)` returns true only when the text was
+  // handed to a live voice session; `noteAppMessage(title, text)` shows the person what the app said.
+  sendToModel = () => false,
+  noteAppMessage = () => {},
 }) {
   let currentDescriptor = null;
   let currentChannel = null;
@@ -68,6 +79,48 @@ export function initMiniAppHost({
   // Approved host actions whose request this page has sent and not yet heard back from. While one is in flight
   // the tool that asked for it is still working, so the room's 5.5s tool budget must not expire under it.
   let executingHostActions = 0;
+  const network = createMiniAppNetwork({ getHost: () => els.miniAppViewport || els.miniAppContainer });
+  // What the mounted app last said its state is, and how many messages it may still send this minute. Both
+  // belong to ONE mount: a remount or a different app starts with neither.
+  // WHO A NETWORK APPROVAL BELONGS TO (PR #40 review). The card's `appId` is a DISPLAY identity: mount() collapses
+  // an incoming app onto an existing entry that shares its title, file name or slug. An approval keyed on that
+  // would pass from the app a person approved to a different one that borrowed its title. So the approval is
+  // keyed on where the incoming app came from and what it calls itself, computed BEFORE the collapse, and
+  // remembered against the mounted entry so a reload or the Allow remount of that same entry keeps it.
+  const networkIds = new WeakMap();
+  const networkIdOf = (descriptor, normKey) => networkIds.get(descriptor) ?? [
+    descriptor.sandbox ? `env:${descriptor.sandbox}` : String(descriptor.source || "workspace"),
+    String(descriptor.appId || descriptor.fileName || normKey || "").toLowerCase(),
+  ].join("|");
+  let appContext = "";
+  let appMessageBudget = createMessageBudget();
+
+  /** An app is speaking to the model. Every refusal is told to the app by name; nothing is dropped silently. */
+  function answerAppMessage(data, channel) {
+    const msgId = typeof data.msgId === "string" ? data.msgId : "";
+    if (!msgId || !channel) return;
+    const reply = (ok, error) => {
+      try { channel.port1.postMessage({ type: "app_message_result", msgId, ok, ...(ok ? {} : { error }) }); } catch { /* the app is gone */ }
+    };
+    // Validated again here: the bridge checked it, and this is the side that acts on it.
+    if (data.kind === "context") {
+      const checked = normalizeAppContext(data.text);
+      if (!checked.ok) return reply(false, checked.why);
+      appContext = checked.text;
+      return reply(true);
+    }
+    if (data.kind !== "message") return reply(false, "unknown message kind");
+    const checked = normalizeAppMessage(data.text);
+    if (!checked.ok) return reply(false, checked.why);
+    if (!appMessageBudget.available()) return reply(false, "too many messages this minute; the model was not told");
+    const title = currentDescriptor?.title || "Mini-App";
+    let delivered = false;
+    try { delivered = sendToModel(frameAppMessage({ title, text: checked.text, context: appContext })) === true; } catch { delivered = false; }
+    if (!delivered) return reply(false, "there is no live voice session; the model was not told");
+    appMessageBudget.spend();
+    try { noteAppMessage(title, checked.text); } catch { /* the note is a courtesy */ }
+    reply(true);
+  }
 
   async function syncMiniAppTools(appId, tools) {
     try {
@@ -92,6 +145,10 @@ export function initMiniAppHost({
       if (window.__voiceboxMiniAppRegistry) {
         window.__voiceboxMiniAppRegistry.updateTools("active-room-app", data.tools);
       }
+    } else if (data.type === "app_message") {
+      answerAppMessage(data, channel);
+    } else if (data.type === "network_blocked") {
+      network.blocked(data.origin);
     } else if (data.type === "host_action_cancel") {
       // The bridge gave up waiting (voicebox-beads-a96w round 2). Drop the bar and refuse it: an Allow that lands
       // after the app was told "nothing was sent" would be exactly the lie this protocol exists to prevent.
@@ -379,6 +436,9 @@ export function initMiniAppHost({
     els.miniAppContainer.hidden = true;
     if (els.miniAppDock) els.miniAppDock.hidden = true;
     if (els.miniAppBubble) els.miniAppBubble.setAttribute("aria-expanded", "false");
+    network.clear();
+    appContext = "";
+    appMessageBudget = createMessageBudget();
     if (els.miniAppViewport) els.miniAppViewport.replaceChildren();
     for (const [callId, entry] of pendingToolCalls.entries()) {
       clearTimeout(entry.timer);
@@ -496,6 +556,7 @@ export function initMiniAppHost({
       }
     }
 
+    const networkId = networkIdOf(descriptor, normKey);
     const appId = existingKey || descriptor.appId || normKey || `app_${Date.now().toString(36)}`;
     if (existingKey && existingKey !== appId) {
       launchedMiniApps.delete(existingKey);
@@ -509,6 +570,7 @@ export function initMiniAppHost({
       fileName: derivedFileName,
       html: descriptor.html,
     };
+    networkIds.set(merged, networkId);
     currentDescriptor = merged;
     launchedMiniApps.set(appId, merged);
 
@@ -542,6 +604,8 @@ export function initMiniAppHost({
     }
 
     const bridgeUrl = `/mini-app-bridge.html?appId=${encodeURIComponent(appId)}`;
+    // What the app may reach: nothing, unless it declares origins and a person approved exactly that set.
+    const access = network.grantFor(networkId, descriptor.html);
 
     // A remount replaces the app the question was about, so the question goes with it.
     if (pendingHostAction) pendingHostAction.finish(false, "the mini-app was remounted before a person answered");
@@ -570,19 +634,28 @@ export function initMiniAppHost({
           [channel.port2],
         );
         outer.contentWindow.postMessage(
-          { type: "load_app", appId, html: descriptor.html, title },
+          { type: "load_app", appId, html: descriptor.html, title, network: access.network },
           window.location.origin,
         );
         currentChannel.port1.postMessage({
           type: "mini_app_init",
           appId,
           html: descriptor.html,
+          network: access.network,
         });
       }
     };
     window.addEventListener("message", onBridgeHandshake);
 
+    network.clear();
+    appContext = "";
+    appMessageBudget = createMessageBudget();
     if (els.miniAppViewport) els.miniAppViewport.replaceChildren(outer);
+    // Asked AFTER the frame is in place: the app is already running offline, and the bar sits above it.
+    if (access.request.declared && !access.approved && !access.declined) {
+      network.ask({ appId: networkId, title, request: access.request, onAllow: () => { if (currentDescriptor === merged) mount(merged); } });
+    }
+    network.problems(access.request.problems);
     sqehSyncMiniApps();
   }
 

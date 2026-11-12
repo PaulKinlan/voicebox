@@ -84,7 +84,8 @@ export function registerTool(tool) {
     tool: {
       name: tool.name,
       description: tool.description || "",
-      parameters: tool.parameters || { type: "object", properties: {} },
+      // WebMCP names the schema inputSchema; parameters is the older Voicebox name.
+      parameters: tool.inputSchema || tool.parameters || { type: "object", properties: {} },
     },
   });
 }
