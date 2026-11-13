@@ -86,3 +86,34 @@ Stdio ACP adapters (`lib/pi-acp.mjs`, `lib/claude-acp.mjs`) spawn local OS subpr
 VOICEBOX_ACP_ADAPTER="$PI_ACP_INSTALL_DIR" VOICEBOX_ACP_PI="$PI_BINARY" \
   node --test tests/acp-client.test.mjs tests/pi-acp.test.mjs tests/acp-browser.test.mjs tests/tasks.test.mjs tests/configured-harness.test.mjs
 ```
+
+---
+
+## Adding an ACP agent by configuration (`lib/acp-agents.mjs`)
+
+Any agent that speaks the Agent Client Protocol over stdio is added as data, with no new module. Two steps:
+
+1. **A spec** says how to launch it. Built in: `antigravity-acp` (`agy acp`), `gemini-acp` (`gemini --acp`), `opencode-acp` (`opencode acp`) and `codex-acp` (`npx -y @zed-industries/codex-acp`). For anything else, or to change a built-in's launch line, write `acp-agents.json` in the host directory (beside `.host-token`), or point `VOICEBOX_ACP_AGENTS_FILE` at a file:
+
+   ```json
+   [
+     { "id": "muse-acp", "label": "Muse", "command": "/path/to/muse-code-acp", "args": [] },
+     { "id": "gemini-acp", "command": "gemini", "args": ["--experimental-acp"], "keepEnv": ["GEMINI_API_KEY"] }
+   ]
+   ```
+
+   | Field | Meaning |
+   | --- | --- |
+   | `id` | The adapter name agent rows use. Lowercase letters, digits and dashes. It cannot be a name Voicebox already provides (`pi-acp`, `claude-code`, `antigravity`, `codex`, `gemini`, `opencode`, …), so adding a spec never changes what an existing row runs. A spec with a built-in's id replaces that built-in. |
+   | `command` | A program name found on `PATH`, or an absolute path. Never resolved against the task's folder. |
+   | `args` | Up to 32 strings. |
+   | `keepEnv` | Environment variables the agent keeps. By default the child does not receive Voicebox's own model keys (`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`); the agent uses its own sign-in. |
+   | `handshakeTimeoutMs` | How long `initialize` and `session/new` may take. Default 120000. |
+
+   A spec is a command line the server will run, so it lives in a file the host's shell writes, with the custody of the host token. It is not a field on an agent row, which a page can post. A malformed entry is skipped and named at startup; the rest load.
+
+2. **An agent row** names the spec: `POST /api/agents` with `{ "id": "agent_muse", "name": "Muse", "harness": "muse", "adapter": "muse-acp", "transport": "stdio", "environmentKey": "<this host's key>" }` and the host token. `GET /api/agents` then shows its admission: admitted, or `adapter-unavailable` when the program is not installed.
+
+`delegate_task` to that agent runs the same pipeline as Pi and Claude Code (`runAcpTask`): the handshake checks the protocol version, the three clocks bound the turn, and permission requests are decided by `lib/acp-decide.mjs` (the row's `reach.tools`, then the workspace boundary).
+
+The Antigravity launch line is from Google's CLI documentation; sign in once with `agy acp --login`. None of the built-in specs has been run against its real agent from this repository's tests, which use a stand-in ACP process (`tests/fixtures/fake-acp-agent.mjs`). The existing `antigravity`, `codex`, `gemini` and `opencode` adapters still run those tools as one-shot CLIs; switch a row to the `-acp` adapter to use ACP.

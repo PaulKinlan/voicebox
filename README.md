@@ -246,9 +246,10 @@ Environment variables read by the server and runtime libraries:
 | `NODE_DISABLE_COLORS` | `lib/logger.mjs` | Node.js built-in flag that disables ANSI terminal colors alongside `NO_COLOR`. |
 | `NO_COLOR` | `lib/logger.mjs` | Disables ANSI color sequences in `lib/logger.mjs` when set to a non-empty value. |
 | `OPENAI_API_KEY` | `lib/live-providers/openai.mjs`, `lib/resolver.mjs`, `server.mjs` | OpenAI API key for OpenAI Realtime voice sessions and the `openai` text turn resolver (can also be configured in the UI Settings dialog). |
-| `PATH` | `lib/claude-acp.mjs`, `lib/tool-index.mjs` | System executable search path, also inherited by task-adapter child processes. |
+| `PATH` | `lib/acp-agents.mjs`, `lib/claude-acp.mjs`, `lib/tool-index.mjs` | System executable search path, also inherited by task-adapter child processes. |
 | `PORT` | `server.mjs` | HTTP server port bound on `127.0.0.1` (default `8787`). |
 | `VOICEBOX_ACP_ADAPTER` | `lib/pi-acp.mjs` | Path or command override for the `pi-acp` stdio adapter binary in `lib/pi-acp.mjs`. |
+| `VOICEBOX_ACP_AGENTS_FILE` | `lib/acp-agents.mjs` | Path to a JSON list of ACP agent specs (`{ id, command, args }`) this host may delegate to, in place of `acp-agents.json` in the host directory. See `docs/11-acp-adapter.md`. |
 | `VOICEBOX_ACP_PI` | `lib/pi-acp.mjs` | Path or command override for the `pi` coding agent CLI used by `lib/pi-acp.mjs`. |
 | `VOICEBOX_ALLOWED_HOSTS` | `server.mjs` | (undocumented — add a line to ENV_MEANING in scripts/docs-check.mjs) |
 | `VOICEBOX_BIND_DEADLINE_MS` | `server.mjs` | Maximum duration in milliseconds to retry binding the server port before failing. |
