@@ -96,8 +96,8 @@ test("the page reports the folder it is showing, and reads a room folder's AGENT
     window.__pageErrors = [];
     window.addEventListener("error", (e) => window.__pageErrors.push(String(e.message)));
     window.addEventListener("unhandledrejection", (e) => window.__pageErrors.push(String(e.reason?.message ?? e.reason)));
-    document.getElementById("mic")?.click();
   });
+  await page.click("#mic");
   const frames = () => page.evaluate(() => window.__sentFrames.map((f) => { try { return JSON.parse(f); } catch { return { type: "unparseable" }; } }));
 
   // 1. The first report happens as soon as the socket is up: the machine root, at its root folder.
