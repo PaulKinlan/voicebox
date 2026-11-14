@@ -26,7 +26,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, statSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -675,6 +675,76 @@ test("gate ON: a refusal from the dev front names the host and the per-host cook
     const directBody = JSON.parse(direct.body);
     assert.equal(direct.status, 401);
     assert.doesNotMatch(directBody.why, /came in on/, "a request to the API itself names no other front");
+  } finally {
+    await server.stop();
+    server.cleanup();
+  }
+});
+
+// ── the redeemed cookie is ROOM AUTHORITY for the routes that ask for the room (voicebox-beads-e38a) ──────────────
+//
+// THE DEFAULT POSTURE IS THE ONE THAT WAS UNTESTED. Loopback auth is ON by default (owner decision 2026-11-12), and
+// under it the page cannot fetch its own HTML — GET / answers 401 without a session — so the room's session TOKEN is
+// not available to a browser that legitimately holds a session. Any route that asked for the token therefore locked
+// the default page out (voicebox-beads-nxpq's extension management, and voicebox-beads-zqsr's exec gate). Every one of
+// those routes' own tests ran with the gate OFF (the harness default), which is exactly how the gap survived.
+//
+// The cookie is the scarcer credential: minted only from a single-use ticket, HttpOnly, SameSite=Strict. It is what
+// hasExplicitRoomAuthority now accepts third, after the host token and the room token.
+test("gate ON (the DEFAULT): the redeemed cookie is room authority for extension management and an exec transcript (voicebox-beads-e38a)", async () => {
+  const server = await scratchServer(GATE_ON);
+  try {
+    const printed = await waitFor(() => server.stdout().match(/http:\/\/\S+\/\?bootstrap=[0-9a-f]{64}/));
+    const redeemed = await fetch(printed[0], { redirect: "manual" });
+    assert.equal(redeemed.status, 303, "the ticket redeems on the page route");
+    const cookie = sessionCookieFrom(redeemed);
+
+    // The API-served page, once signed in, DOES get its token — GET / is authorised by the cookie. That is why
+    // this gap was invisible: the page the API serves was always fine. The page with NO credential to present is the
+    // one the Vite dev front serves, because Vite builds the HTML itself and cannot read a 401 page to find the token.
+    const page = await fetch(`${server.base}/`, { headers: { cookie } });
+    assert.equal(page.status, 200);
+    const meta = /<meta name="voicebox-session-token" content="([^"]*)"/.exec(await page.text());
+    assert.ok(meta, "the page carries a session-token meta element");
+    assert.match(meta[1], /^[0-9a-f]{16,}$/, "a signed-in page is served the room's token");
+    // …and without the session it is refused outright, so nothing on this page can be read to obtain one.
+    assert.equal((await fetch(`${server.base}/`)).status, 401);
+
+    // EXTENSION MANAGEMENT: the COOKIE ALONE is entitled — no x-voicebox-session-token header is sent, which is
+    // exactly the dev front's situation — and the route answers for a non-admitted id.
+    const revoke = (headers) => fetch(`${server.base}/api/extensions/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify({ id: "nope-not-admitted", confirm: true }),
+    });
+    const entitled = await revoke({ cookie, origin: server.base });
+    assert.equal(entitled.status, 404, "the redeemed session is room authority for a management act");
+    assert.equal((await entitled.json()).refused, "extension-not-admitted");
+    const claimOnly = await revoke({ origin: server.base });
+    assert.equal(claimOnly.status, 401, "an Origin claim without a session does not even reach the authority check");
+
+    // AN EXEC-BEARING TRANSCRIPT: the same credential opens it, and the command really runs.
+    const workspace = mkdtempSync(path.join(tmpdir(), "voicebox-e38a-turn-"));
+    const marker = path.join(workspace, "marker.txt");
+    try {
+      const turn = (headers) => fetch(`${server.base}/api/turn`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify({ transcript: `run command touch ${JSON.stringify(marker)}` }),
+      });
+      const refused = await turn({});
+      assert.equal(refused.status, 401, "no session, no shell");
+      assert.equal(existsSync(marker), false);
+      const past = await turn({ cookie });
+      const pastBody = await past.json();
+      // The AUTHORITY is what this arm is about. With the cookie the door opens: whatever the turn itself then answers
+      // (this scratch server has no declared root and no script provider), it must NOT be the room-credential refusal.
+      // The command really running is voicebox-beads-zqsr's own positive control, in tests/turn-exec-authority.test.mjs.
+      assert.notEqual(past.status, 401, "the signed-in page is past the auth wall");
+      assert.notEqual(pastBody.refused, "room-session-required", "the cookie is room authority for an exec transcript");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   } finally {
     await server.stop();
     server.cleanup();

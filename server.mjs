@@ -412,7 +412,17 @@ function hasExtensionAuthority(req) {
 function hasExplicitRoomAuthority(req) {
   if (extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) return true;
   const sessionToken = req.headers["x-voicebox-session-token"];
-  return typeof sessionToken === "string" && sessionToken !== "" && timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN);
+  if (typeof sessionToken === "string" && sessionToken !== "" && timingSafeStringEqual(sessionToken, ROOM_SESSION_TOKEN)) return true;
+  // THE SCARCER CREDENTIAL IS THE COOKIE (voicebox-beads-e38a). Loopback auth is ON by default, and under it the
+  // page cannot fetch its own HTML to read the room token — GET / answers 401 without a session — so the room token
+  // is not available to a browser that has legitimately redeemed a bootstrap ticket. The cookie IS: it is minted
+  // only from a single-use ticket, it is HttpOnly (a hostile page cannot read it) and SameSite=Strict (a cross-site
+  // request does not carry it), which makes it a stronger credential than the room token, not a weaker one. Accepting
+  // it here is what keeps extension management and an exec-bearing transcript usable from the default page — with
+  // the gate OFF the cookie never exists, so this arm simply does not match and the room token is the credential, as
+  // the dev front supplies it.
+  if (sessionCookieOk(req)) return true;
+  return false;
 }
 
 // ── LOOPBACK SESSION AUTH (docs/13 §4 — voicebox-beads-kkc, epic 2gq) ─────────────────────────
