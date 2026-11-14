@@ -26,7 +26,7 @@ The inventory checks a fixed list of known coding agent CLIs across absolute dir
 - **OpenCode** (`opencode`)
 - **Aider** (`aider`)
 
-Each binary is probed with `--version` using `execFile` (no shell interpolation), a 3-second process-group timeout, and an 8,192-byte output cap. Raw filesystem paths and environment variables are never exposed to the browser, and results are cached for 60 seconds.
+Each binary is probed with `--version` using `spawn` (no shell interpolation), a 3-second process-group timeout, and an 8,192-byte output cap. On timeout the check answers at its deadline even if a descendant escaped the group and still holds output pipes; that escaped process is not killed by the group signal. Raw filesystem paths and environment variables are never exposed to the browser, and results are cached for 60 seconds.
 
 ### Inventory Status Values
 

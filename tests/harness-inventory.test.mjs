@@ -64,6 +64,32 @@ test("host inventory separates version-only presence, broken installs, unknown i
   assert.equal(existsSync(path.join(dir, "escaped")), false, "version-check descendants must be killed too");
 });
 
+test("version discovery returns at its deadline despite a detached CLI descendant holding output pipes", { timeout: 10000 }, async (t) => {
+  const setsid = ["/usr/bin/setsid", "/bin/setsid"].find(existsSync);
+  if (!setsid) return t.skip("setsid is unavailable; cannot exercise escaped process groups");
+  let pidFile;
+  // Hooks run in registration order: reap the holder BEFORE fixture(t) removes its pid file.
+  t.after(() => {
+    if (!pidFile || !existsSync(pidFile)) return;
+    const pid = Number(readFileSync(pidFile, "utf8").trim());
+    if (!Number.isSafeInteger(pid) || pid <= 0) return;
+    try { process.kill(-pid, "SIGKILL"); }
+    catch { try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ } }
+  });
+  const { env, dir, command } = fixture(t);
+  pidFile = path.join(dir, "escaped.pid");
+  // The holder writes its own pid; $! may name a short-lived setsid parent instead.
+  command("aider", `echo 'aider 0.1.0'; ${setsid} /bin/sh -c 'echo $$ > "$1"; exec /bin/sleep 8' sh '${pidFile}' & exit 0`);
+  const started = Date.now();
+  const report = await discoverHarnesses({ env, timeoutMs: 300 });
+  const elapsed = Date.now() - started;
+  assert.equal(existsSync(pidFile), true, "the escaped pipe holder must have started");
+  const aider = report.entries.find((entry) => entry.id === "aider");
+  assert.equal(aider.state, "unrunnable", JSON.stringify(aider));
+  assert.match(aider.why, /exceeded 300ms/);
+  assert.ok(elapsed < 2000, `an escaped pipe holder delayed discovery for ${elapsed}ms`);
+});
+
 test("no guessed identity, project PATH lookup, or fallback for a broken configured Pi", async (t) => {
   const { env, dir, command } = fixture(t);
   const report = await discoverHarnesses({ env: { ...env, PATH: ".:", VOICEBOX_ACP_PI: path.join(dir, "missing"), VOICEBOX_ACP_ADAPTER: dir }, timeoutMs: 500 });
