@@ -124,12 +124,21 @@ test('a cross-site text/plain tool registration cannot change the registry; own 
   const machine = await postTools(base, 'machine-app', { 'content-type': 'application/json' });
   assert.equal(machine.status, 200);
   assert.equal((await getTools(base)).length, 1);
-  // A valid host token remains machine authority even if a caller supplies browser-shaped headers.
+  // A valid host token remains machine authority even if a caller supplies browser-shaped headers. Since
+  // voicebox-beads-gesp this route reads through the shared JSON door, so the caller must also say it is sending
+  // JSON — the intent of this arm (the host token beats browser-shaped headers) is unchanged; only the type is.
   const host = await postTools(base, 'host-app', {
-    ...attacker, 'content-type': 'text/plain', 'x-voicebox-host-token': server.hostToken,
+    ...attacker, 'content-type': 'application/json', 'x-voicebox-host-token': server.hostToken,
   });
   assert.equal(host.status, 200);
   assert.equal((await getTools(base)).length, 1);
+  // ...and the narrowing is pinned, so it cannot silently revert: untyped + host token is the door's 415.
+  const untypedHost = await postTools(base, 'untyped-host-app', {
+    ...attacker, 'content-type': 'text/plain', 'x-voicebox-host-token': server.hostToken,
+  });
+  assert.equal(untypedHost.status, 415);
+  assert.equal((await untypedHost.json()).refused, 'unsupported-content-type');
+  assert.equal((await getTools(base)).length, 1, 'the refused untyped call changed nothing');
 });
 
 test('the opt-in loopback wall remains first for unauthenticated cross-site mutations', async (t) => {
