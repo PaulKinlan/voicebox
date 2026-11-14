@@ -173,7 +173,7 @@ test("Anti-Gravity executor: check(), refusal when absent, alias resolution (agy
   const apiExecutor = createAntigravityExecutor({ env: { PATH: agentApiDir } });
   const apiRes = await apiExecutor.run({ input: { task: "delegate via agentapi" }, root: { path: workspaceDir } });
   assert.equal(apiRes.ok, true);
-  assert.match(apiRes.output, /agentapi-ran:run delegate via agentapi/);
+  assert.match(apiRes.output, /agentapi-ran:run -- delegate via agentapi/);
 });
 
 test("Codex, Gemini CLI, and OpenCode executors: check(), refusal when absent, and run() in workspace root", async (t) => {
@@ -202,7 +202,7 @@ test("Codex, Gemini CLI, and OpenCode executors: check(), refusal when absent, a
   });
   assert.equal(codexResult.ok, true);
   assert.equal(codexResult.status, "completed");
-  assert.match(codexResult.output, /codex-ran in .*workspace args:exec --skip-git-repo-check audit repo/);
+  assert.match(codexResult.output, /codex-ran in .*workspace args:exec --skip-git-repo-check -- audit repo/);
   assert.ok(codexUpdates.some((u) => u.status === "running"));
 
   // Gemini CLI
@@ -224,7 +224,7 @@ test("Codex, Gemini CLI, and OpenCode executors: check(), refusal when absent, a
   });
   assert.equal(geminiResult.ok, true);
   assert.equal(geminiResult.status, "completed");
-  assert.match(geminiResult.output, /gemini-ran in .*workspace args:-p summarize changes/);
+  assert.match(geminiResult.output, /gemini-ran in .*workspace args:--prompt=summarize changes/);
 
   // OpenCode CLI
   const opencodeAbsent = createOpenCodeExecutor({ env: { PATH: emptyDir } });
@@ -243,7 +243,7 @@ test("Codex, Gemini CLI, and OpenCode executors: check(), refusal when absent, a
   });
   assert.equal(opencodeResult.ok, true);
   assert.equal(opencodeResult.status, "completed");
-  assert.match(opencodeResult.output, /opencode-ran in .*workspace args:run fix lint/);
+  assert.match(opencodeResult.output, /opencode-ran in .*workspace args:run -- fix lint/);
 
   // describeCliAdapterInstall helper
   assert.equal(describeCliAdapterInstall("antigravity", { env: { PATH: binDir } }).ok, true);
@@ -254,6 +254,27 @@ test("Codex, Gemini CLI, and OpenCode executors: check(), refusal when absent, a
   assert.equal(locateCodex({ env: { PATH: binDir } }).ok, true);
   assert.equal(locateGeminiCli({ env: { PATH: binDir } }).ok, true);
   assert.equal(locateOpenCode({ env: { PATH: binDir } }).ok, true);
+});
+
+test("positional CLI prompts starting with flags remain one argument after the option terminator", async (t) => {
+  const { binDir, workspaceDir, writeExecutable } = createScratchHarnessBin(t);
+  const recordArgs = `if [ "$1" = "--version" ]; then echo "1.0.0"; exit 0; fi
+index=0
+for arg in "$@"; do printf '%s:%s\\n' "$index" "$arg"; index=$((index + 1)); done`;
+  for (const name of ["codex", "opencode", "agentapi", "gemini", "antigravity"]) writeExecutable(name, recordArgs);
+
+  const prompt = "--model attacker-controlled-model";
+  for (const [name, executor, prefix] of [
+    ["codex", createCodexExecutor({ env: { PATH: binDir } }), "0:exec\n1:--skip-git-repo-check\n2:--\n3:"],
+    ["opencode", createOpenCodeExecutor({ env: { PATH: binDir } }), "0:run\n1:--\n2:"],
+    ["agentapi", createAntigravityExecutor({ env: { PATH: binDir }, cliPath: path.join(binDir, "agentapi") }), "0:run\n1:--\n2:"],
+    ["gemini", createGeminiCliExecutor({ env: { PATH: binDir } }), "0:--prompt="],
+    ["antigravity", createAntigravityExecutor({ env: { PATH: binDir } }), "0:--prompt="],
+  ]) {
+    const result = await executor.run({ task: prompt, root: { path: workspaceDir } });
+    assert.equal(result.ok, true, `${name}: fixture CLI ran`);
+    assert.equal(result.output, `${prefix}${prompt}`, `${name}: prompt is one protected argv value`);
+  }
 });
 
 test("Bidirectional harness-project live loop: workspace snapshot, prompt enrichment, file diff detection, and report integration", async (t) => {
