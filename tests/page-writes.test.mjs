@@ -26,6 +26,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startServer } from "./lib/server.mjs";
+import { authenticateLiveRoom } from "./lib/live-room-token.mjs";
 import { launch } from "./lib/cdp.mjs";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -238,6 +239,7 @@ test("the live leg: a spoken write into a page-owned root lands through the chan
     if (m.type === "text") texts.push(m);
   };
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
+  await authenticateLiveRoom(BASE, ws);
   for (let i = 0; i < 100 && !states.some((s) => s.state === "ready"); i++) await sleep(200);
   assert(states.some((s) => s.state === "ready"), "the live session never became ready");
 

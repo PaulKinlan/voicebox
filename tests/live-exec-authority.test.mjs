@@ -1,11 +1,12 @@
 // A key-free /live provider emits real tool calls. Its prompt is test-controlled; the host executor is not mocked.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { startServer } from "./lib/server.mjs";
+import { authenticateLiveRoom } from "./lib/live-room-token.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -27,9 +28,10 @@ registerLiveProvider("gemini", ({ emit }) => ({
       emit({ type: "turn-complete", interactionStatus: "IDLE" });
       return;
     }
-    const name = text === "list" ? "list_files" : "run_command";
+    const supplied = text.startsWith("call:") ? JSON.parse(text.slice(5)) : null;
+    const name = supplied?.name ?? (text === "list" ? "list_files" : "run_command");
     emit({ type: "tool-call", calls: [{ id: String(Date.now()), name,
-      args: name === "run_command" ? { command: text } : { dir: "." } }] });
+      args: supplied?.args ?? (name === "run_command" ? { command: text } : { dir: "." }) }] });
   },
   sendToolResponse() { return true; },
   close() { emit({ type: "closed", code: 1000, reason: "test provider closed" }); },
@@ -78,11 +80,13 @@ async function socketFor(t, base, headers) {
   return { socket, frame, frames };
 }
 
-async function runTool(peer, command) {
-  const result = peer.frame((f) => f.type === "tool" && f.calls?.some((c) => c.name === (command === "list" ? "list_files" : "run_command")), peer.frames.length);
+async function runTool(peer, command, toolName = command === "list" ? "list_files" : "run_command") {
+  const result = peer.frame((f) => f.type === "tool" && f.calls?.some((c) => c.name === toolName), peer.frames.length);
   peer.socket.send(JSON.stringify({ type: "text", text: command }));
   return (await result).calls[0];
 }
+
+const callTool = (peer, name, args = {}) => runTool(peer, `call:${JSON.stringify({ name, args })}`, name);
 
 test("gate-off Origin-only /live cannot execute; explicit room token and paired bearer can", async (t) => {
   const { server, workspace } = await fixture(t, false);
@@ -101,8 +105,29 @@ test("gate-off Origin-only /live cannot execute; explicit room token and paired 
   recovery.socket.send(JSON.stringify({ type: "text", text: "recover:run command touch recovered-without-auth.txt" }));
   assert.equal((await recovered).calls[0].ok, false, "the fallback must not bypass the live exec gate");
   assert.equal(existsSync(path.join(workspace, "recovered-without-auth.txt")), false);
+  const recoveredWrite = recovery.frame((f) => f.type === "tool" && f.recovered, recovery.frames.length);
+  recovery.socket.send(JSON.stringify({ type: "text", text: "recover:write recovered-without-auth.txt with owned by recovery" }));
+  assert.equal((await recoveredWrite).calls[0].ok, false, "the recovery fallback cannot write host files without a session");
+  assert.equal(existsSync(path.join(workspace, "recovered-without-auth.txt")), false);
+
+  const existing = path.join(workspace, "owned.txt");
+  writeFileSync(existing, "original bytes");
+  for (const [name, args] of [
+    ["write_file", { name: "must-not-exist.txt", content: "owned" }],
+    ["edit_file", { name: "owned.txt", oldText: "original", newText: "changed" }],
+    ["delete_file", { name: "owned.txt" }],
+  ]) {
+    const blocked = await callTool(attacker, name, args);
+    assert.equal(blocked.ok, false, `${name} must not change host files without a session`);
+    assert.equal(blocked.refused, "room-session-required", name);
+    assert.equal(existsSync(marker), false, name);
+    assert.equal(readFileSync(existing, "utf8"), "original bytes", name);
+  }
   const benign = await runTool(attacker, "list");
-  assert.equal(benign.ok, true, "non-shell live tools still work");
+  assert.equal(benign.ok, true, "non-mutating live tools still work");
+  const read = await callTool(attacker, "read_file", { name: "owned.txt" });
+  assert.equal(read.ok, true, "the gate must not block file reads");
+  assert.equal(read.content, "original bytes");
 
   attacker.socket.send(JSON.stringify({ type: "session_auth", sessionToken: "wrong" }));
   assert.deepEqual(await attacker.frame((f) => f.type === "session_auth"), { type: "session_auth", ok: false });
@@ -115,6 +140,22 @@ test("gate-off Origin-only /live cannot execute; explicit room token and paired 
   const authorized = await runTool(attacker, "touch room-authorized.txt");
   assert.equal(authorized.ok, true);
   assert.equal(existsSync(path.join(workspace, "room-authorized.txt")), true);
+  const roomWrite = await callTool(attacker, "write_file", { name: "undo-me.txt", content: "retained" });
+  assert.equal(roomWrite.ok, true);
+  const undoTarget = path.join(workspace, "undo-me.txt");
+  assert.equal(readFileSync(undoTarget, "utf8"), "retained");
+  const undoAttempt = await callTool(recovery, "undo_last_action");
+  assert.equal(undoAttempt.refused, "room-session-required", "an Origin-only undo cannot consume the room's undo stack");
+  assert.equal(readFileSync(undoTarget, "utf8"), "retained");
+  const roomDelete = await callTool(attacker, "delete_file", { name: "undo-me.txt" });
+  assert.equal(roomDelete.ok, true);
+  assert.equal(existsSync(undoTarget), false);
+
+  const fixturePeer = await socketFor(t, server.base, { origin: server.base });
+  await authenticateLiveRoom(server.base, fixturePeer.socket);
+  const fixtureWrite = await callTool(fixturePeer, "write_file", { name: "fixture-helper.txt", content: "helper sent the room token" });
+  assert.equal(fixtureWrite.ok, true);
+  assert.equal(readFileSync(path.join(workspace, "fixture-helper.txt"), "utf8"), "helper sent the room token");
 
   const pair = await fetch(`${server.base}/api/pair`, {
     method: "POST", headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
@@ -144,4 +185,7 @@ test("bootstrap-cookie /live session can run a command without a room-token fram
   const result = await runTool(peer, "touch cookie-authorized.txt");
   assert.equal(result.ok, true);
   assert.equal(existsSync(path.join(workspace, "cookie-authorized.txt")), true);
+  const fileWrite = await callTool(peer, "write_file", { name: "cookie-write.txt", content: "cookie proved" });
+  assert.equal(fileWrite.ok, true);
+  assert.equal(readFileSync(path.join(workspace, "cookie-write.txt"), "utf8"), "cookie proved");
 });

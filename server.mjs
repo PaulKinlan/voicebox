@@ -5284,11 +5284,14 @@ server.on("upgrade", (req, socket) => {
   // A paired bearer is set only after the hello gate verifies it; a cookie is meaningful only
   // behind the loopback bootstrap wall; the room token arrives in an explicit WS message.
   let roomSessionAuthenticated = false;
+  // These model-facing verbs mutate host files (or execute a command). Other live tools
+  // retain their existing policy; the HTTP turn has a different authority boundary.
+  const LIVE_HOST_MUTATING_VERBS = new Set(["exec", "write", "edit", "delete", "undo"]);
   const liveExecAuthorized = () => Boolean(ws.bearer) ||
     (LOOPBACK_AUTH && claimsToBeTheLocalPageNow && sessionCookieOk(req)) || roomSessionAuthenticated;
   const executeLiveAction = (action) => {
-    if (action.verb === "exec" && !liveExecAuthorized()) {
-      return { ok: false, refused: "room-session-required", why: "running a command in a live session requires a paired bearer, bootstrap session cookie, or in-room session token; a local Origin header alone is not authority" };
+    if (LIVE_HOST_MUTATING_VERBS.has(action.verb) && !liveExecAuthorized()) {
+      return { ok: false, refused: "room-session-required", why: "changing files or running a command in a live session requires a paired bearer, bootstrap session cookie, or in-room session token; a local Origin header alone is not authority" };
     }
     return execute(action);
   };
