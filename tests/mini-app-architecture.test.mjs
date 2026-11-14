@@ -760,7 +760,9 @@ test("server: /turn validates mini-app tool arguments at host boundary before di
     headers: { "Content-Type": "application/json" },
     body: exact65537Envelope,
   });
-  assert.equal(exact65537Res.status, 400);
+  // 413, not 400 (voicebox-beads-gesp): the route's body goes through the shared door now, whose oversize refusal is
+  // the standard named 413. Review finding 5hj2 caught this arm still asserting the old hand-rolled 400.
+  assert.equal(exact65537Res.status, 413);
   const exact65537Json = await exact65537Res.json();
   assert.equal(exact65537Json.ok, false);
   assert.equal(exact65537Json.refused, "body-too-large");

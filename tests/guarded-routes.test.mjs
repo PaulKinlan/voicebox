@@ -226,7 +226,9 @@ test("mini-apps: every route's guard is declared, and this is the list", () => {
       ["PUT /api/mini-apps", "json", 8 * 1024 * 1024],
       ["DELETE /api/mini-apps", "json", null],
       ["GET /api/mini-app/tools", "read", null],
-      ["POST /api/mini-app/tools", "csrf", null],
+      // The registration route declares its BODY as well as its guard since voicebox-beads-gesp: the CSRF guard
+      // answers first, then the shared door reads it at this route's own 64 KiB bound.
+      ["POST /api/mini-app/tools", "csrf", 65536],
     ],
   );
   for (const route of routes) {

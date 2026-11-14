@@ -227,7 +227,7 @@ Saving asks the same question: the target is the **file** the caller named (a wo
 | **Tool Arguments Schema & Bounds** | Declared JSON schema, max 64 KiB | Host & Outer Bridge | Refused with `missing-argument`, `invalid-argument-type`, `invalid-argument-enum`, or `invalid-tool-arguments`. |
 | **Tool Arguments Depth & Nodes** | Max 32 nesting levels, max 2048 nodes | Host & Outer Bridge | Refused with `invalid-argument-bounds`. |
 | **Tool Schema Depth & Nodes** | Max 16 nesting levels, max 512 nodes | Host (`validateWebMcpTool`) & Bridge | Refused with `invalid-tool-parameters`. |
-| **Tools Registration Body** | Max 64 KiB (`65,536` bytes) | Host (`POST /api/mini-app/tools`) | Refused with HTTP 400 (`body-too-large`). This route predates the server's shared JSON door (voicebox-beads-d808) and keeps its own stricter bound and status; every other JSON route answers `413 body-too-large` from the door. |
+| **Tools Registration Body** | Max 64 KiB (`65,536` bytes) | Host (`POST /api/mini-app/tools`) | Refused with HTTP 413 (`body-too-large`) from the server's shared JSON door (voicebox-beads-d808), which this route uses at its own stricter bound since voicebox-beads-gesp; a non-JSON `Content-Type` is the door's `415`. |
 | **Tool Name Format** | `1–64` chars (`a-zA-Z0-9_-`) | `validateWebMcpTool()` | Refused with `invalid-tool-name`. |
 | **Handshake Source** | `inner.contentWindow` / `window.parent` | Outer Bridge & Inner SDK | Drops unverified postMessage frames from decoy frames. |
 
