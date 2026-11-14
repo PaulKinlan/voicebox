@@ -518,7 +518,7 @@ It is the complete affected-path gate a lane should point `CHECK_FAST_CMD` at. T
 - **Strict scope.** `--allow-unmapped` is a developer escape and the gate refuses it outright (exit 2): a
   gate that may be told to ignore a path it cannot map has no scope, and its PASS is a statement about
   nothing. A mapped test file that is in **no** lane is refused by name rather than quietly run in the
-  unit lane, which is what the old `else matchedUnit.push(file)` fallback did.
+  unit lane, which is what the old `else matchedUnit.push(file)` fallback did. A deleted `tests/*.test.mjs` remains in the git changed-path ledger but cannot self-map to a runnable test (`voicebox-beads-jvar`); existing unclassified tests still refuse. A deletion-only delta is an empty scoped run, not evidence of passing tests — it reports `EMPTY` with no `fast-gate: passed:` marker.
 - **Per-file dispatch.** Each selected file runs in its own process with its own exit code, TAP counts,
   duration and bound, so "PASS" can be attributed to a file. The `ISOLATED` files (`tests/pre-push.test.mjs`,
   `tests/ldxa-barge-in-browser.test.mjs`, `tests/live-openai-browser.test.mjs`,

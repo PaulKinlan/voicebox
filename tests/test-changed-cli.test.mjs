@@ -152,6 +152,15 @@ test("mapToTests: direct test file changes map directly to themselves", () => {
   assert.deepEqual(mapped, ["commands.test.mjs"]);
 });
 
+test("mapToTests: deleted tests are not runnable, but existing unclassified tests still refuse", () => {
+  const deleted = "tests/jvar-deleted-fixture.test.mjs";
+  assert.equal(existsSync(path.join(root, deleted)), false, "the deleted-test fixture path must not exist");
+  assert.deepEqual(mapToTests([deleted]), [], "a deleted test must not map to a nonexistent lane file");
+  assert.deepEqual(mapToTests([deleted, "tests/commands.test.mjs"]), ["commands.test.mjs"], "a live sibling still maps when a test was deleted");
+  const { unclassified } = partitionTests(mapToTests(["tests/commands.test.mjs"]), { unit: [], server: [], browser: [] });
+  assert.deepEqual(unclassified, ["commands.test.mjs"], "a still-existing test with no lane remains fail-closed");
+});
+
 test("mapToTests: library changes map to tests referencing the module or stem", () => {
   const mapped = mapToTests(["lib/commands.mjs"]);
   assert.ok(mapped.includes("commands.test.mjs"), "must include commands.test.mjs");

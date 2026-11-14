@@ -225,6 +225,10 @@ export function mapToTests(changedFiles, allTestFiles = null) {
     const ext = path.extname(norm);
     const stem = path.basename(norm, ext);
 
+    // Git includes deleted test paths in --name-only, but a missing file cannot be
+    // classified or executed. Keep the path in the changed ledger; only skip its
+    // direct self-map. Existing unclassified tests must still fail closed.
+    if (norm.startsWith("tests/") && norm.endsWith(".test.mjs") && !existsSync(path.resolve(ROOT, norm))) continue;
     // If the changed file is itself a test file, it maps directly to itself:
     if ((norm.startsWith("tests/") && norm.endsWith(".test.mjs")) || norm.endsWith(".test.mjs")) {
       matched.add(path.basename(norm));
