@@ -22,7 +22,10 @@
 // names, so a batch exit status cannot honestly be turned into markers for the files inside it). One marker per
 // file either way, and the exit status is 0 only when every file passed.
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { classify } from "./test-lanes.mjs";
 import { ISOLATED, TIER_WORKERS } from "./test-shards.mjs";
 import { emitMarker } from "./gate-manifest.mjs";
@@ -110,17 +113,22 @@ export async function runUnitLane(files, { cwd = process.cwd(), isolated = ISOLA
 
 // A changed live test must not disappear behind the unit lane's green result. Only changed
 // test files are added here; source-file dependency closure belongs to the merger's full gate.
-export function selectChangedLiveTests(changedPaths, classified) {
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+export function selectChangedLiveTests(changedPaths, classified, { exists = (file) => existsSync(path.join(REPO, file)) } = {}) {
   const unit = new Set(classified.unit.map(({ file }) => `tests/${file}`));
   const live = new Set(classified.live.map(({ file }) => `tests/${file}`));
   const selected = [];
   const unmapped = [];
+  const removed = [];
   for (const file of changedPaths) {
-    if (!/^tests\/.+\.test\.mjs$/.test(file) || unit.has(file)) continue;
+    if (!/^tests\/.+\.test\.mjs$/.test(file)) continue;
+    // git diff --name-only includes deleted paths; they cannot be run or classified.
+    if (!exists(file)) { removed.push(file); continue; }
+    if (unit.has(file)) continue;
     if (live.has(file)) selected.push(file);
     else unmapped.push(file);
   }
-  return { selected: [...new Set(selected)].sort(), unmapped: [...new Set(unmapped)].sort() };
+  return { selected: [...new Set(selected)].sort(), unmapped: [...new Set(unmapped)].sort(), removed: [...new Set(removed)].sort() };
 }
 
 /** Run changed live files serially with the scoped gate's per-file process-group deadline. */
@@ -156,7 +164,8 @@ async function main() {
     console.error(emitMarker("unknown", ["no main ref: changed live tests cannot be identified"]));
     throw new Error("cannot prove changed-test coverage without origin/main or main");
   }
-  const { selected, unmapped } = selectChangedLiveTests(getChangedFiles(), classified);
+  const { selected, unmapped, removed } = selectChangedLiveTests(getChangedFiles(), classified);
+  for (const file of removed) console.log(`[test:unit] removed test: ${file} (no file to run)`);
   if (unmapped.length) {
     for (const file of unmapped) console.error(emitMarker("unmapped", [file]));
     throw new Error(`changed test file(s) have no unit or live lane: ${unmapped.join(", ")}`);

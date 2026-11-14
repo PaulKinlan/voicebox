@@ -90,19 +90,26 @@ test("this one is red on purpose", () => { assert.equal(1, 2); });
   }
 });
 
-test("changed live tests are selected exactly once and an unknown changed test fails closed", () => {
+test("changed live tests run, deleted tests skip, and existing unclassified tests fail closed", () => {
   const classified = {
     unit: [{ file: "pure.test.mjs" }],
     live: [{ file: "server.test.mjs" }, { file: "browser.test.mjs" }],
   };
+  const exists = (file) => file !== "tests/deleted.test.mjs";
   assert.deepEqual(selectChangedLiveTests([
     "tests/pure.test.mjs", "tests/browser.test.mjs", "tests/server.test.mjs",
-    "tests/browser.test.mjs", "tests/unclassified.test.mjs", "lib/other.mjs",
-  ], classified), {
+    "tests/browser.test.mjs", "tests/deleted.test.mjs", "tests/deleted.test.mjs",
+    "tests/unclassified.test.mjs", "lib/other.mjs",
+  ], classified, { exists }), {
     selected: ["tests/browser.test.mjs", "tests/server.test.mjs"],
     unmapped: ["tests/unclassified.test.mjs"],
+    removed: ["tests/deleted.test.mjs"],
   });
-  assert.deepEqual(selectChangedLiveTests(["tests/pure.test.mjs"], classified), { selected: [], unmapped: [] });
+  assert.deepEqual(selectChangedLiveTests(["tests/pure.test.mjs"], classified, { exists }), { selected: [], unmapped: [], removed: [] });
+  // A rename can yield both old and new paths: only the current file is exercised.
+  assert.deepEqual(selectChangedLiveTests(["tests/deleted.test.mjs", "tests/server.test.mjs"], classified, { exists }), {
+    selected: ["tests/server.test.mjs"], unmapped: [], removed: ["tests/deleted.test.mjs"],
+  });
 });
 
 test("changed live test results emit per-file markers and refuse red or silent files", async () => {
