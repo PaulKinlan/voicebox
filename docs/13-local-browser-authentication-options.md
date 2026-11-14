@@ -23,6 +23,8 @@ Injecting an ephemeral session token into openly served HTML (for example, `<met
 
 To distinguish the authorized user's browser session from an unprivileged local process, the initial credential must be delivered out-of-band rather than embedded in unauthenticated HTML.
 
+The `GET /api/permissions/pending` read contains tool-call arguments and titles. It requires `x-voicebox-host-token` or the in-room `x-voicebox-session-token`; a missing token or a claimed local `Origin` alone receives `403 room-session-required` without a pending list. `POST /api/permissions/resolve` remains host-token-only. The in-room token comes from unauthenticated page HTML in the default loopback mode: this check prevents Origin-only requests and accidental exposure, **not** a local process that fetches the public HTML. Enable `VOICEBOX_LOOPBACK_AUTH=1` to place the page itself behind the out-of-band bootstrap ticket on a shared loopback host.
+
 ---
 
 ## 2. Architectural Options Evaluated
