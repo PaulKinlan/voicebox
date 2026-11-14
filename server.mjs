@@ -4855,23 +4855,6 @@ async function handle(req, res) {
           return json(res, 200, { transcript, action: null, note: action.unresolved });
         }
         delete action.turn;
-        // A TRANSCRIPT CAN REACH THE SHELL TOO, AND THAT TAKES THE ROOM'S OWN CREDENTIAL (voicebox-beads-zqsr).
-        // udjb gated only an EXPLICIT action, on the argument that the transcript path is "the room's own flow". The
-        // argument was half right: the page cannot hold the HOST token — but it does hold the ROOM token, and its own
-        // request helper already sends it (public/fused.js sends x-voicebox-session-token on every call, /api/turn
-        // included). So an exec-bearing transcript is gated on the room credential and the page is unaffected, while
-        // an unauthenticated `{"transcript":"run command touch <marker>"}` — which returned 200 and wrote the marker —
-        // now has no shell. Read and file verbs are untouched: dictation that asks what is in a folder still works with
-        // no header at all. The limit is 93kz's: the room token is served in GET /'s HTML, so a local process that can
-        // read this server's page can replay it; only VOICEBOX_LOOPBACK_AUTH and the host token stop that.
-        if (HOST_EXEC_VERBS.has(action.verb) && !hasExplicitRoomAuthority(req)) {
-          return json(res, 403, {
-            ok: false,
-            refused: "room-session-required",
-            error: "refused: room-session-required",
-            why: `this transcript resolved to '${action.verb}', which runs a command on this machine through its own shell. That takes the room's own session token (x-voicebox-session-token) or the host token (x-voicebox-host-token). The room's page sends the first automatically; an Origin header is only a claim. Verbs that read a file or list a folder need no credential.`,
-          });
-        }
       }
 
       if (typeof parsed.dir === "string" && parsed.dir.trim()) {
