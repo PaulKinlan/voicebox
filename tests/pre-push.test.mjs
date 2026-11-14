@@ -1167,27 +1167,27 @@ test('pre-push seals ONE full manifest from the tier records, and a red tier lea
     // Every file the gate RUNS, not just the gate script: the tier runner, the aggregator it folds into,
     // and the classifier/sharding modules they import (docs-touched needs its script and lib/git-env.mjs,
     // like every other fixture in this file). WHENEVER AN IMPORT IS ADDED TO ONE OF THESE SCRIPTS, ITS
-    // TARGET BELONGS IN THIS LIST: a missing one is not a soft failure, it is ERR_MODULE_NOT_FOUND and this
+    // TARGET BELONGS IN THIS LIST: stray-sweep.mjs is imported by gate-tier/test-changed. A missing one
+    // is not a soft failure, it is ERR_MODULE_NOT_FOUND and this
     // fixture dies with an error that names a temp directory rather than the missing file. That is exactly
     // how lib/host-load.mjs (voicebox-beads-zjpm.6) broke this fixture while every unit-lane check stayed
     // green — this file is classified into the BROWSER lane (voicebox-beads-l79v), so a unit-only fast gate
     // never runs it.
-    for (const file of ['scripts/pre-push.sh', 'scripts/docs-touched.mjs', 'scripts/gate-tier.mjs', 'scripts/gate-manifest.mjs', 'scripts/test-lanes.mjs', 'scripts/test-shards.mjs', 'scripts/test-changed.mjs', 'scripts/infra-affected.mjs', 'tools/browser-shard-runner.mjs', 'lib/git-env.mjs', 'lib/host-load.mjs', 'lib/browser-binaries.mjs']) {
+    for (const file of ['scripts/pre-push.sh', 'scripts/docs-touched.mjs', 'scripts/gate-tier.mjs', 'scripts/gate-manifest.mjs', 'scripts/stray-sweep.mjs', 'scripts/test-lanes.mjs', 'scripts/test-shards.mjs', 'scripts/test-changed.mjs', 'scripts/infra-affected.mjs', 'tools/browser-shard-runner.mjs', 'lib/git-env.mjs', 'lib/host-load.mjs', 'lib/browser-binaries.mjs']) {
       mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
       copyFileSync(path.join(root, file), path.join(repo, file));
     }
     writeFileSync(path.join(repo, 'README.md'), '# Manifest fixture\n\nA disposable repository for the gate\'s own receipt.\n');
     writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: { 'test:unit': 'node --test', 'test:live': 'node --test', accept: 'node -e ""' } }));
-    // Three lanes, one file each: a plain test (unit), one that CONSTRUCTS a path to the server helper
-    // (server) and one that constructs a path to the browser runner (browser). Both helper files use
-    // path.join, which is the shape the repo's own fixtures use for a helper they mean to use, and which
-    // makes the path BEHAVIOUR rather than data (voicebox-beads-l79v): merely NAMING 'lib/server.mjs' in a
-    // string is a mention, and a mention now files a test in no lane but unit — which left this fixture with
-    // one tier and broke the fold below (voicebox-beads-3766). An IMPORT would classify the same way but
-    // cannot be used here: this fixture really RUNS these files in a disposable repo that has no lib/.
+    // Three lanes, one file each. Import tiny fixture helpers so the classifier sees actual use,
+    // not path.join mentions without a launch (those correctly stay in the unit lane). The real
+    // gate and classifier remain copied above; only these two imported helpers are inert stubs.
+    writeFileSync(path.join(repo, 'lib', 'server.mjs'), "export const fixture = 'server';\n");
+    mkdirSync(path.join(repo, 'tests', 'lib'), { recursive: true });
+    writeFileSync(path.join(repo, 'tests', 'lib', 'cdp.mjs'), "export const fixture = 'browser';\n");
     writeFileSync(path.join(repo, 'tests', 'plain.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('plain', () => assert.equal(1 + 1, 2));\n");
-    writeFileSync(path.join(repo, 'tests', 'names-server.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport path from 'node:path';\nconst helper = path.join('lib', 'server.mjs');\ntest('server-ish', () => assert.ok(helper.endsWith('server.mjs')));\n");
-    writeFileSync(path.join(repo, 'tests', 'names-browser.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport path from 'node:path';\nconst helper = path.join('tools', 'browser-shard-runner.mjs');\ntest('browser-ish', () => assert.ok(helper.endsWith('browser-shard-runner.mjs')));\n");
+    writeFileSync(path.join(repo, 'tests', 'names-server.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { fixture } from '../lib/server.mjs';\ntest('server-ish', () => assert.equal(fixture, 'server'));\n");
+    writeFileSync(path.join(repo, 'tests', 'names-browser.test.mjs'), "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { fixture } from './lib/cdp.mjs';\ntest('browser-ish', () => assert.equal(fixture, 'browser'));\n");
     git('add', '-A');
     git('commit', '-qm', 'fixture: three lanes');
     // The gate asks the changed-path map against `origin/main` — the branch a landing is compared to — so the
