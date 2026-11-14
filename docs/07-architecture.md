@@ -22,6 +22,8 @@ This document describes the runtime architecture of Voicebox as implemented in t
 
 `public/live-voice.js` captures microphone audio through the `pcm-worklet.js` AudioWorklet and streams PCM frames over `/live` to `lib/live-session.mjs`.
 
+For key-free browser verification, `tests/fixtures/live-capture-provider.mjs` substitutes only the upstream `gemini` provider in an isolated test server. `tests/pip-window-styling.test.mjs`, `tests/pip-presence.test.mjs`, `tests/mic-hotkey.test.mjs` and the browser arm of `tests/vision-controls-extraction.test.mjs` still click the real page and use Chrome's fake media devices; they do not claim vendor ASR coverage. A missing key otherwise makes the real provider abort, releases capture and opens Settings over the controls under test.
+
 <!-- BEGIN GENERATED: live-session — values below are derived and re-checked; the prose around them is written by a person and is only as true as its last reading -->
 **Live Voice Providers (`lib/live-session.mjs`)**: `claude` (`(registered, but this check has no capture for it)`), `gemini` (`models/gemini-3.8-live`), `openai` (`gpt-realtime`). The default fallback provider is `gemini` (configurable via `VOICEBOX_LIVE_PROVIDER` or selected per session in the UI Settings dialog).
 <!-- END GENERATED: live-session -->

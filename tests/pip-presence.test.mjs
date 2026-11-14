@@ -12,9 +12,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startServer } from "./lib/server.mjs";
 import { launch } from "./lib/cdp.mjs";
+import { fileURLToPath } from "node:url";
 
 let server;
-test.before(async () => { server = await startServer({ env: { VOICEBOX_INSTANCE: "pip-presence" } }); });
+test.before(async () => { server = await startServer({ env: {
+  VOICEBOX_INSTANCE: "pip-presence",
+  NODE_OPTIONS: `--import=${fileURLToPath(new URL("./fixtures/live-capture-provider.mjs", import.meta.url))}`,
+} }); });
 test.after(async () => { await server?.stop?.(); });
 
 // THE PAINTER HAS PAINTED IT (voicebox-beads-g667). Every read here used to follow a 500ms sleep — "two ticks,

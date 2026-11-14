@@ -390,7 +390,12 @@ test("the real room: camera on and off with the tracks really released, preview 
   let page;
   try {
     server = await startServer({
-      env: { VOICEBOX_WORKSPACE: undefined, VOICEBOX_SANDBOX_HOMES: undefined, VOICEBOX_INSTANCE: "vision-controls-extraction" },
+      // Camera start also presses the microphone. Keep the real browser capture path,
+      // but avoid a keyless provider error opening Settings over the PTT controls.
+      env: {
+        VOICEBOX_WORKSPACE: undefined, VOICEBOX_SANDBOX_HOMES: undefined, VOICEBOX_INSTANCE: "vision-controls-extraction",
+        NODE_OPTIONS: `--import=${fileURLToPath(new URL("./fixtures/live-capture-provider.mjs", import.meta.url))}`,
+      },
     });
     // Chrome's own fake capture device, so the module's REAL path runs: nothing here replaces getUserMedia
     // with a stand-in stream, and the track states asserted at the end are the browser's own.

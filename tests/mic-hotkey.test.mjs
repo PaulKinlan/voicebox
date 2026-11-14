@@ -25,7 +25,10 @@ let page;
 test.before(async () => {
   server = await startServer({
     cwd: ROOT,
-    env: { VOICEBOX_INSTANCE: "mic-hotkey-test" },
+    env: {
+      VOICEBOX_INSTANCE: "mic-hotkey-test",
+      NODE_OPTIONS: `--import=${fileURLToPath(new URL("./fixtures/live-capture-provider.mjs", import.meta.url))}`,
+    },
   });
   BASE = server.base;
   page = await launch();
