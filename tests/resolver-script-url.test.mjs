@@ -41,7 +41,7 @@ test("a URL with no readable host is unresolved, never a thrown ERR_INVALID_URL"
 });
 
 test("the turn door answers the same way the resolver does", async () => {
-  const action = await resolveTurn(authoring + "http://[bad");
+  const action = await resolveTurn(authoring + "http://[bad", "script");
   assert.equal(typeof action.unresolved, "string");
   assert.match(action.unresolved, /http:\/\/\[bad/);
 });

@@ -1774,7 +1774,10 @@ if (legacyResolverEnv) {
     ? `[voicebox] VOICEBOX_PROVIDER is now VOICEBOX_RESOLVER (it selects the turn resolver, not the live provider) — IGNORING ${JSON.stringify(legacyResolverEnv)} because VOICEBOX_RESOLVER is set`
     : `[voicebox] VOICEBOX_PROVIDER is now VOICEBOX_RESOLVER (it selects the turn resolver, not the live provider) — honouring ${JSON.stringify(legacyResolverEnv)} for this release`);
 }
-const PROVIDER = process.env.VOICEBOX_RESOLVER ?? legacyResolverEnv ?? "script";
+// NO DEFAULT RESOLVER. With no explicit choice and no model key there is no turn brain at all, and
+// `resolveTurn` answers a turn with NO_MODEL_NOTE. The keyless "script" parser is a test/development
+// resolver that must be chosen by name (tests/lib/server.mjs does); it is never what a user gets by default.
+const PROVIDER = process.env.VOICEBOX_RESOLVER ?? legacyResolverEnv ?? null;
 function effectiveProvider() {
   if (process.env.VOICEBOX_RESOLVER || legacyResolverEnv) return PROVIDER;
   const selected = agentSettings?.provider;
@@ -2007,7 +2010,7 @@ PATHS
   console.log(`
 CHOICES — these are BOOT decisions, not settings for a running session
 `);
-  line("VOICEBOX_RESOLVER", "script", "the TURN BRAIN: script | gemini");
+  line("VOICEBOX_RESOLVER", "(from the model key)", "the TURN BRAIN: gemini | openai | claude (script is test-only)");
   line("VOICEBOX_LIVE_PROVIDER", "gemini", "the LIVE TRANSPORT: gemini | openai");
   line("VOICEBOX_HARNESS", "(none)", "the TASK HARNESS: pi");
   if (process.env.VOICEBOX_PROVIDER) {
@@ -2035,9 +2038,11 @@ CREDENTIALS — presence only, never a value
   key("GEMINI_API_KEY", "needed by resolver=gemini and live provider gemini");
   key("OPENAI_API_KEY", "needed by live provider openai");
 
-  const wantResolver = process.env.VOICEBOX_RESOLVER ?? process.env.VOICEBOX_PROVIDER ?? "script";
+  const wantResolver = process.env.VOICEBOX_RESOLVER ?? process.env.VOICEBOX_PROVIDER
+    ?? (set(process.env.GEMINI_API_KEY) ? "gemini" : set(process.env.OPENAI_API_KEY) ? "openai" : set(process.env.ANTHROPIC_API_KEY) ? "claude" : "none");
   const wantLive = process.env.VOICEBOX_LIVE_PROVIDER ?? process.env.LIVE_PROVIDER ?? "gemini";
   const missing = [];
+  if (wantResolver === "none") missing.push("no model key: turns need GEMINI_API_KEY, OPENAI_API_KEY or ANTHROPIC_API_KEY");
   if (wantResolver === "gemini" && !set(process.env.GEMINI_API_KEY)) missing.push("resolver=gemini needs GEMINI_API_KEY");
   if (wantLive === "gemini" && !set(process.env.GEMINI_API_KEY)) missing.push("live=gemini needs GEMINI_API_KEY");
   if (wantLive === "openai" && !set(process.env.OPENAI_API_KEY)) missing.push("live=openai needs OPENAI_API_KEY");
@@ -5788,7 +5793,7 @@ try {
   // port cannot run beside another, and the failure appears in someone else's lane as an unexplained
   // block — the most expensive kind, because they cannot tell it is your test.
   console.log(
-    `voicebox on http://127.0.0.1:${bound} — provider: ${PROVIDER}, root: ${active ? active.root.path : "(none declared)"}`,
+    `voicebox on http://127.0.0.1:${bound} — provider: ${effectiveProvider() ?? "none (no model key)"}, root: ${active ? active.root.path : "(none declared)"}`,
   );
   if (LOOPBACK_AUTH) {
     // The bootstrap URL is the ONLY way in while the gate is on (docs/13 §4): one-time ticket,
