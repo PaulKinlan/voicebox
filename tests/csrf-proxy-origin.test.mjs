@@ -156,44 +156,48 @@ test('the /api hop entitles only this dev front, so a hostile Origin is refused 
     return { status: response.status, refused: (await response.json()).refused };
   };
 
-  // THE CONTROL: entitlement granted is observable on the direct call (an allowed Origin reaching the route).
+  // THE CREDENTIAL IS THE BOUNDARY NOW, SO THE ORIGIN IS NOT (voicebox-beads-nxpq). Extension management asks for
+  // the room's own session token or the host token, which means the /api hop has nothing left to launder: a caller
+  // without the credential is refused whichever Origin it claims and whichever door it uses, and a caller with it is
+  // the room by definition (the token is served into the page the front serves — see the arm below). The pdr6 finding
+  // is therefore SATISFIED by the stronger rule rather than tested by the weaker one, and this arm says both things:
+  // no door mints the credential, and the entitled call is entitled through the front as well as directly.
+  const token = /<meta name="voicebox-session-token" content="([0-9a-f]{8,})"/.exec(await (await fetch(`${api.base}/`)).text())?.[1];
+  assert.ok(token, "the room's session token is served into the page");
+
+  // THE CONTROL: the entitled answer, presenting the credential the route now asks for.
   assert.deepEqual(
-    await answer(api.base, { origin: api.base }),
+    await answer(api.base, { origin: api.base, 'x-voicebox-session-token': token }),
     { status: 404, refused: 'extension-not-admitted' },
-    'the direct call from the server\'s own page Origin is the entitled answer this test compares against',
+    'a direct call with the room credential reaches the route (and the id is not admitted)',
   );
 
-  // THE FINDING: the same hostile Origin through the dev front must NOT be entitled.
-  assert.deepEqual(
-    await answer(front, { origin: 'https://attacker.example' }),
-    { status: 403, refused: 'host-token-required' },
-    'a hostile Origin through the Vite /api hop was laundered into the room page and the route ran (pdr6)',
-  );
-  assert.deepEqual(
-    await answer(api.base, { origin: 'https://attacker.example' }),
-    { status: 403, refused: 'host-token-required' },
-    'and the direct call must answer the same way, or the front is still the softer door',
-  );
+  // THE FINDING: no door and no Origin claim buys authority without the credential.
+  for (const [base, headers, what] of [
+    [front, { origin: 'https://attacker.example' }, 'a hostile Origin through the Vite /api hop'],
+    [api.base, { origin: 'https://attacker.example' }, 'and the same Origin directly'],
+    [front, { origin: 'http://127.0.0.1:9999' }, 'a falsely-loopback Origin through the front'],
+    [front, { origin: front }, "the front's own page without the credential"],
+    [front, {}, 'an unheaded machine caller through the front'],
+  ]) {
+    assert.deepEqual(
+      await answer(base, headers),
+      { status: 403, refused: 'room-session-required' },
+      `${what} must not be entitled: the hop mints an Origin, never a credential`,
+    );
+  }
 
-  // A loopback Origin that does not match the addressed Host is unverifiable, not entitled.
+  // THE POSITIVE CONTROL: this front's own page, holding the credential the front serves it, is entitled through
+  // the front — so the rule did not simply close the route for everyone.
   assert.deepEqual(
-    await answer(front, { origin: 'http://127.0.0.1:9999' }),
-    { status: 403, refused: 'host-token-required' },
-    'a falsely-loopback Origin must not buy the authority the WS hops already refuse',
-  );
-
-  // THE POSITIVE CONTROL: this front's own page is still entitled through the front, so the fix did not
-  // simply close the route for everyone.
-  assert.deepEqual(
-    await answer(front, { origin: front }),
+    await answer(front, { origin: front, 'x-voicebox-session-token': token }),
     { status: 404, refused: 'extension-not-admitted' },
     "the dev front's own page must keep the entitlement its root declaration and settings rely on",
   );
 
-  // A machine caller via the front is not turned into the page: no Origin is minted, so no entitlement.
-  assert.deepEqual(
-    await answer(front, {}),
-    { status: 403, refused: 'host-token-required' },
-    'a hop that mints an Origin for an unheaded caller is the same laundering with a different shape',
-  );
+  // AND THE FRONT NOW SERVES THAT CREDENTIAL, rather than blanking it: a page the front hands out without a token
+  // could not manage an extension at all (voicebox-beads-nxpq), which is the product regression this arm pins.
+  const frontHtml = await (await fetch(`${front}/`)).text();
+  const frontToken = /<meta name="voicebox-session-token" content="([0-9a-f]{8,})"/.exec(frontHtml)?.[1];
+  assert.equal(frontToken, token, 'the dev front serves the room token, not the empty placeholder');
 });

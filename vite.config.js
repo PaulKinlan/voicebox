@@ -217,10 +217,40 @@ function loudStaticMiss() {
 // injected into the page's JS: Vite serves public/ root files straight to the
 // browser, so an `define` would never reach them, and index.html is the one
 // document every server in this repo has to produce.
+/**
+ * The room's per-process session token, read out of the page the API serves — the same page this front proxies.
+ * Cached for the life of the process: the token is minted once at startup. A failure is not an error here, because a
+ * dev front without a running API is a normal state (the page then presents no credential and the server answers as it
+ * always has); it is deliberately not cached, so a restart of the API is picked up on the next page load.
+ */
+let roomSessionTokenCache = null;
+async function roomSessionToken() {
+  if (roomSessionTokenCache !== null) return roomSessionTokenCache;
+  try {
+    const response = await fetch(API_TARGET, { headers: { accept: "text/html" } });
+    if (!response.ok) return "";
+    const html = await response.text();
+    const match = /<meta name="voicebox-session-token" content="([0-9a-f]{16,})"/.exec(html);
+    if (!match) return "";
+    roomSessionTokenCache = match[1];
+    return roomSessionTokenCache;
+  } catch {
+    return "";
+  }
+}
+
 function buildStamp() {
   return {
     name: "voicebox-build-stamp",
-    transformIndexHtml(html) {
+    // THE DEV FRONT'S PAGE CARRIES THE ROOM'S TOKEN, LIKE THE SERVER'S OWN PAGE DOES (voicebox-beads-nxpq).
+    // This used to be blanked — `.replace("__VOICEBOX_SESSION_TOKEN__", "")` — because the token is minted per API
+    // process and Vite never knew it. That was survivable while the server's authority rules accepted a page ORIGIN
+    // as the room's claim, and it stopped being survivable the moment extension management and an exec-bearing
+    // transcript began asking for the room's own credential (nxpq, zqsr): a page served by this front would have had
+    // no credential to present and would have been locked out of both. The token is served into the server's own
+    // page already, so fetching it here grants the dev front nothing the page it fronts does not already have; if
+    // the API is not answering, the placeholder stays empty and the page behaves exactly as it does today.
+    async transformIndexHtml(html) {
       const build = buildIdentity();
       // A BRANCH WITH NO REMOTE-TRACKING REF used to render as `0635dd5no origin/feat/serve-help`:
       // the clause carried no leading separator, so the sha ran straight into the sentence and the
@@ -239,7 +269,7 @@ function buildStamp() {
       const content = `${build.branch} @ ${build.commit}${where}${build.dirty ? " · uncommitted changes" : ""}`;
       return html
         .replace("__VOICEBOX_BUILD_STAMP__", content)
-        .replace("__VOICEBOX_SESSION_TOKEN__", "");
+        .replace("__VOICEBOX_SESSION_TOKEN__", await roomSessionToken());
     },
   };
 }
