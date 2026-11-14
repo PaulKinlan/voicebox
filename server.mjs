@@ -4902,28 +4902,6 @@ async function handle(req, res) {
   // The host retains the auth wall and its authority check; the extension route module handles
   // discovery, staging and decisions through the same bounded JSON door.
   if (await extensionRoutes(req, res, url)) return;
-  if (req.method === "GET" && url.pathname === "/api/permissions/pending") {
-    // Pending tool calls include arguments; a forgeable Origin is not authority to read them.
-    if (!hasExplicitRoomAuthority(req)) {
-      return json(res, 403, { ok: false, refused: "room-session-required", why: "reading pending permission requests requires the room session token (x-voicebox-session-token) or host token (x-voicebox-host-token); an Origin header is not authority" });
-    }
-    return json(res, 200, { ok: true, pending: permissions.pending() });
-  }
-
-  if (req.method === "POST" && url.pathname === "/api/permissions/resolve") {
-    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
-      return json(res, 403, { ok: false, refused: "host-token-required", why: "resolving a permission request requires the host token (x-voicebox-host-token); the page cannot hold it" });
-    }
-    const body = await readJson().catch((err) => { if (err instanceof BodyRefusal) throw err; return {}; });
-    const requestId = typeof body?.requestId === "string" ? body.requestId : null;
-    if (!requestId) return json(res, 400, { ok: false, refused: "bad-request", why: "resolving a permission request names the requestId" });
-    const result = permissions.resolve(requestId, {
-      allow: Boolean(body.allow),
-      optionId: typeof body.optionId === "string" ? body.optionId : undefined,
-      reason: typeof body.reason === "string" ? body.reason : undefined,
-    });
-    return json(res, result.ok ? 200 : 409, result);
-  }
   // ── PAIRING + PROXIED CALL (docs/09-proxied-custody.md; journal-wdq decisions 3+4) ─────────────
   // Custody: the page holds NO remote credential. It names an environment by KEY and the local host
   // originates the call, attaching the bearer it holds. Pairing is the explicit act that creates the
