@@ -50,6 +50,7 @@ npm start
 6. **WebSocket Upgrade Protection (`/channel` & `/live`)**:
    - When the gate is on, local same-origin WebSocket upgrades must present **both** a loopback `Origin` header and a valid `vb_session` cookie (`browser/acts.ts` sends the cookie automatically on same-origin upgrades).
    - Local processes that forge `Origin: http://127.0.0.1:8787` without the cookie fall through to the remote pairing-bearer check and fail with `executor-unauthenticated` (`/channel`) or `unauthenticated-call` (`/live`). Paired remote peers authenticating via `{"type":"hello","bearer":"vbx_..."}` continue to work unchanged.
+   - **Live shell tools have a separate gate (`voicebox-beads-ji0h`).** `/live` may be admitted on a local `Origin` claim when the loopback wall is off, but its `run_command`/`exec` tool and the system-error recovery path then refuse with `room-session-required` before touching the host. A verified pairing bearer, a bootstrap cookie when the wall is on, or the room's explicit `{ "type":"session_auth", "sessionToken":"..." }` WebSocket frame enables shell calls. The page sends the frame immediately on open; the token is not put in the URL or forwarded to the model. The room token is embedded in publicly served HTML when the wall is off, so a local process can fetch it and authenticate too; this gate stops Origin-only calls, **not** an adversarial local process under the opt-out posture. Other live tools are unchanged.
 
 ---
 

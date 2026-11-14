@@ -111,8 +111,14 @@ test("the page reports the folder it is showing, and reads a room folder's AGENT
     })), null, 2));
     throw error;
   });
-  const first = (await frames()).find((f) => f.type === "folder");
+  const sent = await frames();
+  const first = sent.find((f) => f.type === "folder");
   assert.equal(first.dir, "", "the root of the declared machine root is reported as ''");
+  const roomToken = await page.evaluate(() => document.querySelector('meta[name="voicebox-session-token"]')?.content);
+  assert.ok(roomToken, "the page holds an in-room token");
+  assert.deepEqual(sent[0], { type: "session_auth", sessionToken: roomToken },
+    "the real microphone path must prove room authority before sending folder or voice frames");
+  if (process.env.VOICEBOX_JI0H_EVIDENCE) await page.screenshot(process.env.VOICEBOX_JI0H_EVIDENCE);
 
   // 2. A person's navigation: into packages, then into api.
   await page.waitFor(
