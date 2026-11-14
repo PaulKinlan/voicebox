@@ -155,7 +155,7 @@ test("the full gate runs every test file exactly once, and the fast gate's set i
   // Both stages take their file list from the ONE classifier — no hand-kept list that can rot, and
   // no second definition of "the fast gate's files" that merely happens to agree today.
   assert.match(pkg.scripts["test:unit"], /scripts\/test-unit\.mjs/, "the fast gate must run the unit lane through its runner");
-  assert.match(read("scripts", "test-unit.mjs"), /classify\(\)\.unit/, "the fast gate's runner must take its files from the unit lane of the classifier");
+  assert.match(read("scripts", "test-unit.mjs"), /const classified = classify\(\);[\s\S]*classified\.unit\.map/, "the fast gate's runner must take its files from the unit lane of the classifier");
   assert.match(pkg.scripts["test:live"], /test-lanes\.mjs --lane server/, "the live stage must take its server files from the server lane");
   assert.match(pkg.scripts["test:live"], /browser-shard-runner\.mjs/, "the live stage must run the browser tier through its shard runner");
 

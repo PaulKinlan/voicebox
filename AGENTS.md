@@ -171,7 +171,7 @@ Every plan, task decomposition, implementation, and review must optimize for the
   - **Full-Stack Feature Completion (UI Mandate)**: Every user-facing feature or backend capability (such as live video streaming, activity control, model configuration, or harness tools) must include fully wired, accessible browser UI components in `public/` (not just backend modules or isolated prototypes) before a bead can be marked complete.
 - **Test only what changed during inner-loop iteration**:
   - While developing in a worktree, sub-agents must run **only the scoped test file(s) covering the touched component** (`node --test tests/<component>.test.mjs`) plus fast static checks (`node scripts/single-owner.mjs`, `node scripts/docs-check.mjs`). Do not run the full serial `live` suite inside every sub-agent worktree unless changing a shared harness/server primitive.
-  - Write new tests in the **concurrent `unit` lane** (`npm run test:unit`) whenever behavior can be verified without launching Chromium or a full server process; reserve the serial `live` lane for true end-to-end integration boundaries.
+  - Write new tests in the **concurrent `unit` lane** whenever behavior can be verified without launching Chromium or a full server process; reserve the serial `live` lane for true end-to-end integration boundaries. The fleet's `npm run test:unit` fast gate also runs changed live test files serially with a bounded budget; it fails closed if any changed test cannot be exercised.
   - Never introduce fixed multi-second `sleep()` calls for positive conditions — always wait on events or bounded condition predicates (`page.waitFor`).
 
 ### 5. Active Planning & Beads (`bd`) Handoff Discipline

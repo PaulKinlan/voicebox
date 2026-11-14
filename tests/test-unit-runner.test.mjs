@@ -13,7 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { planUnitRuns, runUnitLane } from "../scripts/test-unit.mjs";
+import { planUnitRuns, runUnitLane, selectChangedLiveTests, runChangedLiveTests } from "../scripts/test-unit.mjs";
 import { ISOLATED } from "../scripts/test-shards.mjs";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -87,6 +87,100 @@ test("this one is red on purpose", () => { assert.equal(1, 2); });
     assert.ok(markers.includes("fast-gate: failed: tests/red.test.mjs"), `a red file must be marked failed: ${markers.join(" | ")}`);
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("changed live tests are selected exactly once and an unknown changed test fails closed", () => {
+  const classified = {
+    unit: [{ file: "pure.test.mjs" }],
+    live: [{ file: "server.test.mjs" }, { file: "browser.test.mjs" }],
+  };
+  assert.deepEqual(selectChangedLiveTests([
+    "tests/pure.test.mjs", "tests/browser.test.mjs", "tests/server.test.mjs",
+    "tests/browser.test.mjs", "tests/unclassified.test.mjs", "lib/other.mjs",
+  ], classified), {
+    selected: ["tests/browser.test.mjs", "tests/server.test.mjs"],
+    unmapped: ["tests/unclassified.test.mjs"],
+  });
+  assert.deepEqual(selectChangedLiveTests(["tests/pure.test.mjs"], classified), { selected: [], unmapped: [] });
+});
+
+test("changed live test results emit per-file markers and refuse red or silent files", async () => {
+  const marked = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (line) => { marked.push(String(line)); };
+  console.error = (line) => { marked.push(String(line)); };
+  const calls = [];
+  try {
+    const failed = await runChangedLiveTests(
+      ["tests/green.test.mjs", "tests/red.test.mjs", "tests/silent.test.mjs"],
+      {
+        runFile: async (file, options) => { calls.push([file, options.timeoutMs]); return { file }; },
+        statusOf: ({ file }) => file.includes("green") ? "passed" : file.includes("red") ? "failed" : "unknown",
+        budgetMs: 250,
+        now: () => 0,
+      },
+    );
+    assert.equal(failed, 2);
+    assert.deepEqual(calls, [["tests/green.test.mjs", 250], ["tests/red.test.mjs", 250], ["tests/silent.test.mjs", 250]]);
+    assert.ok(marked.includes("fast-gate: passed: tests/green.test.mjs"));
+    assert.ok(marked.includes("fast-gate: failed: tests/red.test.mjs"));
+    assert.ok(marked.includes("fast-gate: unknown: tests/silent.test.mjs"));
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+});
+
+test("a changed live file actually runs and its failing assertion blocks the gate", async () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "voicebox-fast-live-"));
+  const marker = path.join(scratch, "executed");
+  const printed = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  try {
+    fs.mkdirSync(path.join(scratch, "tests"));
+    fs.writeFileSync(path.join(scratch, "tests", "green.test.mjs"), `import test from 'node:test'; import fs from 'node:fs'; test('runs', () => fs.writeFileSync(${JSON.stringify(marker)}, 'yes'));`);
+    fs.writeFileSync(path.join(scratch, "tests", "red.test.mjs"), `import test from 'node:test'; import assert from 'node:assert/strict'; test('red', () => assert.fail('real assertion'));`);
+    const { runOneFile, statusOf } = await import("../scripts/test-changed.mjs");
+    console.log = (line) => { printed.push(String(line)); };
+    console.error = (line) => { printed.push(String(line)); };
+    const failed = await runChangedLiveTests(["tests/green.test.mjs", "tests/red.test.mjs"], {
+      runFile: (file, options) => runOneFile(file, { ...options, cwd: scratch }), statusOf,
+      budgetMs: 5000,
+    });
+    assert.equal(failed, 1);
+    assert.equal(fs.readFileSync(marker, "utf8"), "yes", "the child ran its body, not just the selector");
+    assert.ok(printed.includes("fast-gate: passed: tests/green.test.mjs"));
+    assert.ok(printed.includes("fast-gate: failed: tests/red.test.mjs"));
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("changed live test budget refuses unrun files instead of reporting a green gate", async () => {
+  const markers = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (line) => { markers.push(String(line)); };
+  console.error = (line) => { markers.push(String(line)); };
+  let calls = 0;
+  try {
+    const failed = await runChangedLiveTests(["tests/slow.test.mjs", "tests/unrun.test.mjs"], {
+      budgetMs: 100,
+      now: () => ++calls === 1 ? 0 : 101,
+      runFile: async () => { throw new Error("a file beyond the budget must never start"); },
+      statusOf: () => "passed",
+    });
+    assert.equal(failed, 2);
+    assert.ok(markers.includes("fast-gate: unknown: tests/slow.test.mjs"));
+    assert.ok(markers.includes("fast-gate: unknown: tests/unrun.test.mjs"));
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
   }
 });
 
