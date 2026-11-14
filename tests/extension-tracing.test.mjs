@@ -78,7 +78,11 @@ test("extension network logging: query-string credentials are scrubbed from fetc
     name: "URL Redact Probe",
     description: "Probe for query credential scrubbing",
     capabilities: ["network"],
-    bounds: { hosts: ["127.0.0.1"], maxRequests: 5 },
+    // A header that reads the host's environment NAMES the variable it reads (TM-EXT-004), so this
+    // probe declares the one it interpolates. The property under test is still the log scrubbing
+    // (voicebox-beads-l9i3): the auth header has to actually resolve, which is what makes callHttp
+    // emit the '(auth: Authorization)' line this test checks is redacted.
+    bounds: { hosts: ["127.0.0.1"], maxRequests: 5, credentials: ["PROBE_TEST_AUTH"] },
     tools: [
       {
         name: "probe_fetch",
