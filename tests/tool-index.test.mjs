@@ -154,10 +154,14 @@ test("HTTP GET /api/tools, POST /api/root { self: true }, and /api/turn for list
   });
 
   try {
-    const turn = (transcript) =>
+    // A transcript that RESOLVES TO exec needs the room's own credential (voicebox-beads-zqsr); the rest do not. The
+    // room's page sends its session token on every call, so the helper takes one when a turn will reach the shell.
+    const roomToken = /<meta name="voicebox-session-token" content="([0-9a-f]{8,})"/.exec(await (await fetch(`${srv.base}/`)).text())?.[1];
+    assert.ok(roomToken, "the room's session token is served into the page");
+    const turn = (transcript, headers = {}) =>
       fetch(`${srv.base}/api/turn`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...headers },
         body: JSON.stringify({ transcript }),
       }).then((r) => r.json());
 
@@ -207,7 +211,7 @@ test("HTTP GET /api/tools, POST /api/root { self: true }, and /api/turn for list
     assert.equal(turnWriteSub.result.ok, true);
     assert.equal(turnWriteSub.result.file, "src/new-module.mjs");
 
-    const turnExec = await turn("run command node -e \"console.log(21 * 2)\"");
+    const turnExec = await turn("run command node -e \"console.log(21 * 2)\"", { "x-voicebox-session-token": roomToken });
     assert.equal(turnExec.action.verb, "exec");
     assert.equal(turnExec.result.ok, true, JSON.stringify(turnExec.result));
     assert.equal(turnExec.result.exitCode, 0);
