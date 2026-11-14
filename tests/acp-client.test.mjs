@@ -261,17 +261,30 @@ async function turnFixture(options, onPrompt, decide) {
 }
 
 test("a working harness outlives the silence bound: every update re-arms it, and the turn completes", async () => {
-  const f = await turnFixture({ timeoutMs: 1000, promptSilenceMs: 60, promptBudgetMs: 2000 }, async (m, send) => {
-    for (let i = 0; i < 6; i += 1) { await sleep(30); send(i % 2 ? chunk("x") : toolUpdate()); } // 180ms of work, never 60ms quiet
+  // THE WINDOW AND THE CADENCE MUST BE FAR APART, NOT MERELY ORDERED (voicebox-beads-5ps4). This arm used a
+  // 60ms silence window with an update every 30ms — a 2x margin that the unit pool's scheduler jitter
+  // exceeds, so the clock expired while the harness was WORKING: measured at 4508ms inside the 132-file
+  // pool and 171ms/green when the file runs alone. The property under test is RE-ARMING, and proving it
+  // needs work spanning several windows, not a tight race against one — a 20x margin over a 400ms window,
+  // with 800ms of work (two windows) and never a 20ms quiet spell. The window is deliberately generous in
+  // ABSOLUTE terms, because scheduler jitter under load is absolute, not proportional.
+  const windowMs = 400;
+  const cadenceMs = 20;
+  const updates = 40;
+  const chunks = updates / 2;
+  const f = await turnFixture({ timeoutMs: 6000, promptSilenceMs: windowMs, promptBudgetMs: 5000 }, async (m, send) => {
+    for (let i = 0; i < updates; i += 1) { await sleep(cadenceMs); send(i % 2 ? chunk("x") : toolUpdate()); }
     send(result(m, { stopReason: "end_turn" }));
   });
-  assert.equal(await f.client.prompt("go"), "xxx", "three silences' worth of work must not time out");
+  assert.equal(await f.client.prompt("go"), "x".repeat(chunks), "two silences' worth of work must not time out");
   f.client.close();
 });
 
 test("a harness that goes silent is stopped by name, and the name says silence", async () => {
-  const f = await turnFixture({ timeoutMs: 1000, promptSilenceMs: 40, promptBudgetMs: 2000 }, (_m, send) => { send(chunk("a")); });
-  await assert.rejects(f.client.prompt("go"), (err) => err.refused === "acp-timeout" && /went silent: the harness sent no update for 40ms/.test(err.message));
+  // A WAITING-FOR-EXPIRY ARM DOES NOT NEED A TIGHT WINDOW (voicebox-beads-5ps4): a late expiry is still an
+  // expiry, so a wider window costs a little time and nothing else — 150ms is far outside scheduler jitter.
+  const f = await turnFixture({ timeoutMs: 1000, promptSilenceMs: 150, promptBudgetMs: 2000 }, (_m, send) => { send(chunk("a")); });
+  await assert.rejects(f.client.prompt("go"), (err) => err.refused === "acp-timeout" && /went silent: the harness sent no update for 150ms/.test(err.message));
   assert.equal(f.closed(), 1, "a silent harness is closed, not left running");
 });
 
