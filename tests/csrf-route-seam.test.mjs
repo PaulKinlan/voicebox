@@ -59,6 +59,9 @@ const decisions = new Map([
   ["POST /api/fleet/contact", "json"],
   ["POST /api/tasks/delegate", "json"],
   ["POST /api/root", "json"],
+  // voicebox-beads-lscn: resolving a pending permission request is the host's act - the page cannot hold the
+  // host token - so the door carries a decision like every other mutating route.
+  ["POST /api/permissions/resolve", "host-token"],
   ["POST /api/probe", "csrf"],
   ["POST /api/environments", "json"],
   ["POST /api/turn", "json"],
