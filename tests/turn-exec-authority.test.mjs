@@ -88,3 +88,65 @@ test("the explicit system verb is gated the same way (voicebox-beads-udjb)", asy
     assert.equal((await res.json()).refused, "host-token-required");
   });
 });
+
+// ── the transcript path can reach the shell too (voicebox-beads-zqsr) ────────────────────────────────────────────
+//
+// udjb gated only an EXPLICIT action, on the argument that a transcript turn is "the room's own flow". Half right:
+// the page cannot hold the HOST token, but it does hold the ROOM token and its own request helper already sends it
+// (public/fused.js sends x-voicebox-session-token on every call, /api/turn included). So the transcript path is
+// gated on the room credential, which costs the page nothing and closes the credential-free shell.
+
+async function roomSessionToken(base) {
+  const html = await (await fetch(`${base}/`)).text();
+  const match = /<meta name="voicebox-session-token" content="([0-9a-f]{8,})"/.exec(html);
+  assert.ok(match, "the room's session token is no longer served in the page; this test's premise changed");
+  return match[1];
+}
+
+test("a transcript that resolves to exec is refused without the room's own credential (voicebox-beads-zqsr)", async () => {
+  await withServer(async ({ server, scratch }) => {
+    const marker = path.join(scratch, "transcript-marker.txt");
+    for (const [what, headers] of [
+      ["no headers at all", {}],
+      ["an Origin claim", { origin: "http://127.0.0.1:1" }],
+      ["a guessed in-room session token", { "x-voicebox-session-token": "guessed" }],
+    ]) {
+      const res = await turn(server, { transcript: `run command touch ${JSON.stringify(marker)}` }, headers);
+      assert.equal(res.status, 403, `${what} must not reach the shell through a transcript`);
+      const body = await res.json();
+      assert.equal(body.refused, "room-session-required", `${what} must be refused by name`);
+      assert.match(body.why, /x-voicebox-session-token/, "the refusal names the credential it wants");
+      assert.equal(fs.existsSync(marker), false, `${what}: the command must not have run`);
+    }
+  });
+});
+
+test("the room's own session token still runs an exec transcript — the page's flow is not broken (voicebox-beads-zqsr)", async () => {
+  await withServer(async ({ server, scratch }) => {
+    const marker = path.join(scratch, "transcript-marker-room.txt");
+    const token = await roomSessionToken(server.base);
+    const res = await turn(server, { transcript: `run command touch ${JSON.stringify(marker)}` }, { "x-voicebox-session-token": token });
+    assert.equal(res.status, 200, "the room's own turn must run");
+    const body = await res.json();
+    assert.equal(body.action?.verb, "exec");
+    assert.equal(body.result?.ok, true, JSON.stringify(body.result));
+    assert.equal(fs.existsSync(marker), true, "the command really ran: the positive control");
+    // The host token is the other legitimate holder, and it is the only one the page cannot present.
+    const byHost = path.join(scratch, "transcript-marker-host.txt");
+    const hostRes = await turn(server, { transcript: `run command touch ${JSON.stringify(byHost)}` }, { "x-voicebox-host-token": server.hostToken });
+    assert.equal(hostRes.status, 200);
+    assert.equal(fs.existsSync(byHost), true);
+  });
+});
+
+test("a transcript with a read verb still needs no credential at all (voicebox-beads-zqsr)", async () => {
+  await withServer(async ({ server, workspace }) => {
+    fs.writeFileSync(path.join(workspace, "plain.txt"), "the room's dictation must keep working");
+    for (const transcript of ["read plain.txt", "list files"]) {
+      const res = await turn(server, { transcript });
+      assert.equal(res.status, 200, `'${transcript}' must not need a credential: the page cannot always hold one`);
+      const body = await res.json();
+      assert.notEqual(body.refused, "room-session-required", `'${transcript}' is not an exec verb`);
+    }
+  });
+});
