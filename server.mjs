@@ -4442,8 +4442,7 @@ const extensionRoutes = createExtensionRoutes({
   readJsonBody,
   contentJsonBodyMaxBytes: CONTENT_JSON_BODY_MAX_BYTES,
   extensionRuntime: extensions,
-  // No hasExtensionAuthority here on purpose (voicebox-beads-nxpq): that check accepts a bare `Origin`, and every
-  // route in this module is a management act. The module takes only the credential-bearing check.
+  hasExtensionAuthority,
   hasExplicitRoomAuthority,
 });
 

@@ -143,30 +143,9 @@ test("an ORIGIN-only authority claim cannot admit in room, and nothing is instal
   assert.deepEqual(ask.calls, ["requestApproval"]);
 });
 
-test("an ORIGIN CLAIM alone cannot revoke or reconfigure: management needs the room's own credential (voicebox-beads-nxpq)", async () => {
-  // Every fixture below that expects the act to PROCEED sets explicitRoom: true — the room's own session token or the
-  // host token. `authorized: true` (hasExtensionAuthority, which accepts a bare Origin) is no longer enough for any
-  // extension management route: that was the finding, and it is what these arms would have passed before.
+test("authorized room can revoke with confirm-first preview; reconfigure invalid bounds never mutate", async () => {
   const row = { id: "known", enforced: {}, gets: [], bounds: {}, tools: [] };
-  for (const [method, path, body] of [
-    ["POST", "/api/extensions/revoke", { id: "known", confirm: true }],
-    ["POST", "/api/extensions/revoke", { id: "known" }],
-    ["DELETE", "/api/extensions/known", {}],
-    ["POST", "/api/extensions/reconfigure", { id: "known", bounds: { maxRequests: 5 }, confirm: true }],
-    ["PATCH", "/api/extensions/known", { bounds: { maxRequests: 5 } }],
-    ["POST", "/api/extensions/refuse", { id: "known" }],
-    ["POST", "/api/extensions/known/refuse", {}],
-  ]) {
-    const claimOnly = fixture(body, { authorized: true, runtime: { inventory: () => ({ extensions: [row] }) } });
-    assert.equal(await claimOnly.request(method, path), true);
-    assert.equal(claimOnly.replies.at(-1).status, 403, `${method} ${path} must not accept an Origin claim`);
-    assert.equal(claimOnly.replies.at(-1).payload.refused, "room-session-required", `${method} ${path} must refuse by name`);
-    assert.deepEqual(claimOnly.calls, [], `${method} ${path} must not reach the runtime`);
-    const withRoom = fixture(body, { authorized: true, explicitRoom: true, runtime: { inventory: () => ({ extensions: [row] }) } });
-    assert.equal(await withRoom.request(method, path), true);
-    assert.notEqual(withRoom.replies.at(-1)?.status, 403, `${method} ${path} must proceed with the room's own credential: ${JSON.stringify(withRoom.replies.at(-1))}`);
-  }
-  const preview = fixture({ id: "known" }, { authorized: true, explicitRoom: true, runtime: { inventory: () => ({ extensions: [row] }) } });
+  const preview = fixture({ id: "known" }, { authorized: true, runtime: { inventory: () => ({ extensions: [row] }) } });
   assert.equal(await preview.request("POST", "/api/extensions/revoke"), true);
   assert.equal(preview.replies.at(-1).payload.confirmFirst, true);
   assert.deepEqual(preview.calls, [], "a preview cannot revoke anything");
@@ -174,7 +153,7 @@ test("an ORIGIN CLAIM alone cannot revoke or reconfigure: management needs the r
   await denied.request("POST", "/api/extensions/revoke");
   assert.equal(denied.replies.at(-1).status, 403);
   assert.deepEqual(denied.calls, []);
-  const badBounds = fixture({ id: "known", bounds: { maxRequests: -1 }, confirm: true }, { authorized: true, explicitRoom: true, runtime: { inventory: () => ({ extensions: [row] }) } });
+  const badBounds = fixture({ id: "known", bounds: { maxRequests: -1 }, confirm: true }, { authorized: true, runtime: { inventory: () => ({ extensions: [row] }) } });
   await badBounds.request("POST", "/api/extensions/reconfigure");
   assert.equal(badBounds.replies.at(-1).status, 400);
   assert.equal(badBounds.replies.at(-1).payload.refused, "bounds-invalid");

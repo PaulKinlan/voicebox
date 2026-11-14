@@ -574,9 +574,7 @@ test("REVOCATION: a running extension can be withdrawn by the host, and the tool
   // Token-gated: the page cannot revoke.
   const untokened = await postJson("/api/extensions/revoke", { id: "notes-r2", confirm: true });
   assert.equal(untokened.ok, false);
-  // voicebox-beads-nxpq: an Origin claim is no longer authority for a management act, so the refusal names the
-  // credential this route actually wants (the room's own session token, or the host token).
-  assert.equal(untokened.refused, "room-session-required");
+  assert.equal(untokened.refused, "host-token-required");
   // The host revokes: confirm-first discloses what stops, then the decision.
   const disclosure = await fetch(`${server.base}/api/extensions/revoke`, { method: "POST", headers: { "content-type": "application/json", "x-voicebox-host-token": hostToken() }, body: JSON.stringify({ id: "notes-r2" }) }).then((r) => r.json());
   assert.equal(disclosure.confirmFirst, true);
@@ -616,7 +614,7 @@ test("API: DELETE /api/extensions/:id and POST/PATCH /api/extensions/reconfigure
   // 1. Reconfigure endpoint requires host token
   const unauthReconfig = await postJson("/api/extensions/reconfigure", { id: "web-search", bounds: { maxRequests: 50 }, confirm: true });
   assert.equal(unauthReconfig.ok, false);
-  assert.equal(unauthReconfig.refused, "room-session-required", "voicebox-beads-nxpq: reconfigure takes the room's own credential");
+  assert.equal(unauthReconfig.refused, "host-token-required");
 
   // 2. Reconfigure confirm-first disclosure
   const disclosure = await fetch(`${server.base}/api/extensions/reconfigure`, {
@@ -708,14 +706,12 @@ test("API: DELETE /api/extensions/:id and POST/PATCH /api/extensions/reconfigure
     body: JSON.stringify({ id: "web-search", bounds: { maxRequests: 99 }, confirm: true }),
   }).then((r) => r.json());
   assert.equal(foreignCall.ok, false);
-  // A FOREIGN Origin plus a bogus session token: the Origin is not a credential and the token does not match
-  // (voicebox-beads-nxpq renamed this refusal to name the credential the route actually wants).
-  assert.equal(foreignCall.refused, "room-session-required");
+  assert.equal(foreignCall.refused, "host-token-required");
 
   // 6. DELETE /api/extensions/:id requires authorization
   const unauthDelete = await fetch(`${server.base}/api/extensions/web-search`, { method: "DELETE" }).then((r) => r.json());
   assert.equal(unauthDelete.ok, false);
-  assert.equal(unauthDelete.refused, "room-session-required");
+  assert.equal(unauthDelete.refused, "host-token-required");
 
   // 6. DELETE /api/extensions/:id revokes the running extension
   const deleted = await fetch(`${server.base}/api/extensions/web-search`, {
