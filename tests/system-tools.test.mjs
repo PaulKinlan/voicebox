@@ -261,6 +261,29 @@ console.log(JSON.stringify({
     assert.equal(env.GIT_DIR, path.join(other, ".git"), "the caller's environment is not mutated");
   });
 
+  it("runSystemCommand returns at its deadline even when an escaped descendant holds output pipes", async (t) => {
+    if (!resolveSystemBinary("setsid")) return t.skip("setsid is unavailable; cannot exercise an escaped process group");
+    const rootPath = makeScratchDir("vb-escaped-timeout-");
+    let escapedPid;
+    try {
+      const started = Date.now();
+      const result = await runSystemCommand(rootPath, {
+        command: "/bin/sh",
+        args: ["-c", "setsid sleep 10 & echo $!; wait"],
+        timeoutMs: 300,
+      });
+      escapedPid = Number(result.stdout.trim());
+      assert.ok(Number.isSafeInteger(escapedPid) && escapedPid > 0, JSON.stringify(result));
+      assert.equal(result.refused, "command-timed-out", JSON.stringify(result));
+      assert.ok(Date.now() - started < 2000, "escaped pipe holder must not delay timeout resolution");
+      assert.ok(result.durationMs < 2000, `reported duration must match the deadline: ${result.durationMs}ms`);
+    } finally {
+      if (escapedPid) {
+        try { process.kill(escapedPid, "SIGKILL"); } catch { /* already exited */ }
+      }
+    }
+  });
+
   it("runSystemCommand refuses missing rootPath, missing tools, and commands exceeding timeoutMs", async () => {
     const rootPath = makeScratchDir("vb-refusal-root-");
 
