@@ -931,11 +931,6 @@ for (const [id, desc] of Object.entries(API_KEY_DESCRIPTORS)) {
     process.env[desc.env] = persistedKeys[id];
   }
 }
-function maskKey(val) {
-  const s = typeof val === "string" ? val.trim() : "";
-  if (!s) return null;
-  return `••••${s.slice(-4)}`;
-}
 function apiKeysStatusPayload() {
   const keys = {};
   for (const [id, desc] of Object.entries(API_KEY_DESCRIPTORS)) {
@@ -943,7 +938,6 @@ function apiKeysStatusPayload() {
     const configured = Boolean(val && String(val).trim());
     keys[id] = {
       configured,
-      masked: maskKey(val),
       env: desc.env,
       label: desc.label,
       source: persistedKeys[id] ? "ui" : (configured ? "env" : "none"),
@@ -4138,6 +4132,9 @@ const routes = {
   ...toolCatalogRoutes,
   "GET /api/keys": (req, res) => json(res, 200, apiKeysStatusPayload()),
   "PUT /api/keys": async (req, res) => {
+    if (!extensions.hostTokenOk(req.headers["x-voicebox-host-token"])) {
+      return json(res, 403, { ok: false, refused: "host-token-required", why: "Saving provider keys requires the host token (x-voicebox-host-token)." });
+    }
     const parsed = await readJsonBody(req, res);
     if (parsed === null) {
       return json(res, 400, { ok: false, refused: "bad-request", why: "body must be JSON" });

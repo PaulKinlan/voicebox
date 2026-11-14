@@ -131,10 +131,24 @@ test("API: GET /api/keys, PUT /api/keys, and POST /api/harnesses/configure", asy
     assert.equal(getKeysBody.keys.openai.configured, false);
     assert.equal(getKeysBody.keys.anthropic.configured, false);
 
-    // 2. PUT /api/keys sets and persists keys, returning masked hints
+    // 2. No host token (or a wrong one) must not mutate keys or the host store.
+    for (const headers of [
+      { "content-type": "application/json" },
+      { "content-type": "application/json", "x-voicebox-host-token": "wrong-token" },
+    ]) {
+      const refused = await fetch(`${base}/api/keys`, {
+        method: "PUT", headers, body: JSON.stringify({ gemini: "unauthorized-test-key" }),
+      });
+      assert.equal(refused.status, 403);
+      assert.equal((await refused.json()).refused, "host-token-required");
+      assert.equal((await (await fetch(`${base}/api/keys`)).json()).keys.gemini.configured, false);
+      assert.equal(fs.existsSync(path.join(server.extensionsDir, ".api-keys.json")), false);
+    }
+
+    // Host-authorized PUT sets and persists keys without returning any suffix of them.
     const putKeysRes = await fetch(`${base}/api/keys`, {
       method: "PUT",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
       body: JSON.stringify({
         gemini: "AIzaSyTestKey1234567890",
         openai: "sk-proj-test9876543210",
@@ -144,9 +158,10 @@ test("API: GET /api/keys, PUT /api/keys, and POST /api/harnesses/configure", asy
     const putKeysBody = await putKeysRes.json();
     assert.equal(putKeysBody.ok, true);
     assert.equal(putKeysBody.keys.gemini.configured, true);
-    assert.equal(putKeysBody.keys.gemini.masked, "••••7890");
+    assert.equal("masked" in putKeysBody.keys.gemini, false);
     assert.equal(putKeysBody.keys.openai.configured, true);
-    assert.equal(putKeysBody.keys.openai.masked, "••••3210");
+    assert.equal("masked" in putKeysBody.keys.openai, false);
+    assert.equal("masked" in (await (await fetch(`${base}/api/keys`)).json()).keys.gemini, false, "GET must not expose key suffixes either");
     assert.equal(putKeysBody.keys.anthropic.configured, false);
     assert.equal(
       fs.existsSync(path.join(server.extensionsDir, ".api-keys.json")),
@@ -157,7 +172,7 @@ test("API: GET /api/keys, PUT /api/keys, and POST /api/harnesses/configure", asy
     // Clear a key via empty string
     const clearKeyRes = await fetch(`${base}/api/keys`, {
       method: "PUT",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-voicebox-host-token": server.hostToken },
       body: JSON.stringify({ openai: "" }),
     });
     assert.equal(clearKeyRes.status, 200);

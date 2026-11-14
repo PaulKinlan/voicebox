@@ -134,7 +134,7 @@ const WANTED = {
   sqehReaderBubbleName: "sqeh-reader-bubble-name",
   apiKeyGemini: "api-key-gemini", apiKeyOpenai: "api-key-openai", apiKeyAnthropic: "api-key-anthropic",
   apiKeyGeminiStatus: "api-key-gemini-status", apiKeyOpenaiStatus: "api-key-openai-status", apiKeyAnthropicStatus: "api-key-anthropic-status",
-  apiKeysSave: "api-keys-save", apiKeysStatus: "api-keys-status",
+  apiKeysSave: "api-keys-save", apiKeysStatus: "api-keys-status", apiKeysHostToken: "api-keys-host-token",
   syncToast: "sync-toast", syncToastMessage: "sync-toast-message",
   syncToastReload: "sync-toast-reload", syncToastDismiss: "sync-toast-dismiss",
   statusHelpToggle: "status-help-toggle", statusHelpPopover: "status-help-popover",

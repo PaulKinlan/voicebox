@@ -28,7 +28,7 @@ All host credentials and pairing records live in the host state directory manage
 |---|---|---|
 | `.host-token` | `0600` | Per-host secret required for administrative actions (`x-voicebox-host-token`). |
 | `.pairings.json` | `0600` | Stores issued and outbound pairing bearer tokens (`vbx_...`) and `revokedBearers` by `envKey`. |
-| `.api-keys.json` | `0600` | Stores provider API keys configured via the UI Settings dialog (`GET` / `PUT /api/keys`). |
+| `.api-keys.json` | `0600` | Stores provider API keys configured via the UI Settings dialog (`GET` / `PUT /api/keys`); writes require the host token before parsing the body, and status responses contain no key suffixes. |
 | `.harness-settings.json` | `0600` | Stores the active coding agent harness selection configured via `GET` / `PUT /api/harnesses/active`. |
 
 Bearer tokens are never logged, never returned to the browser, and never echoed in error or refusal messages.
