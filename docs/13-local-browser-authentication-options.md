@@ -34,6 +34,8 @@ Established by tools such as Jupyter Notebook and VS Code Server (`code-server`)
 3. Navigating to `/?bootstrap=<ticket>` redeems the ticket once, sets an `HttpOnly`, `SameSite=Strict` session cookie (`vb_session`), and answers `303` to the same route with the ticket removed — so the address bar is left holding the plain page a refresh can re-request.
 4. Subsequent HTTP, REST API, and WebSocket (`/channel`, `/live`) requests require either the session cookie or `x-voicebox-host-token`.
 
+   On the **dev front** (`localhost:5173`) the redemption is proxied, and that hop carries a rule of its own (`vite.config.js` `loopback-bootstrap-proxy`, `voicebox-beads-jbh2`): only a **navigation** is forwarded — `GET`/`HEAD` — and it goes with the browser's own `Origin`, `Sec-Fetch-*` and `x-voicebox-proxied-origin`, not with a cookie alone. Both halves matter. A redemption is a navigation, so no other method has any business on this hop; and absence of `Origin`/`Sec-Fetch-Site` is read upstream as "a caller that is not a browser" (which is exactly what `browserMutationRefused` looks for), so a hop that dropped them would let a mutating request mint machine-caller context for itself by appending one query parameter.
+
 ### Option B: Browser-Generated WebCrypto Key & Console Pairing
 1. On first load, the browser generates a non-extractable ECDSA P-256 keypair (`crypto.subtle.generateKey(..., false, ["sign", "verify"])`), stores it in IndexedDB, and displays a pairing code.
 2. The user confirms the pairing code in the terminal using `.host-token`.

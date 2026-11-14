@@ -129,9 +129,29 @@ function loopbackBootstrapProxy() {
       server.middlewares.use((req, res, next) => {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (!url.searchParams.has("bootstrap")) return next();
+        // A REDEMPTION IS A NAVIGATION, SO ONLY A NAVIGATION GETS ONE (voicebox-beads-jbh2). This middleware used
+        // to forward ANY method carrying ?bootstrap= to the API with nothing but a cookie header: no Origin, no
+        // Sec-Fetch-Site. server.mjs reads those absent headers as "a caller that is not a browser" (the point of
+        // browserMutationRefused is that a browser cannot drop them), so a request could MINT MACHINE-CALLER CONTEXT
+        // for itself by appending one query parameter to a mutating call. The ticket exchange itself is a GET on
+        // the page route (server.mjs "GET /" consumes the ticket and answers 303 + Set-Cookie); no other method has
+        // any business here. Anything else falls through to the ordinary /api hop below, which forwards the browser's
+        // real Origin, Sec-Fetch-* and x-voicebox-proxied-origin — i.e. gets judged as the browser request it is.
+        if (req.method !== "GET" && req.method !== "HEAD") return next();
+        const headers = { cookie: req.headers.cookie ?? "" };
+        // FORWARD WHAT THE BROWSER SAID ABOUT ITSELF. Absence is not neutrality here: the upstream treats a missing
+        // Origin/Sec-Fetch-Site as a non-browser caller, so dropping them is a privilege, not a blank.
+        for (const name of ["sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user", "referer", "user-agent", "accept"]) {
+          if (typeof req.headers[name] === "string") headers[name] = req.headers[name];
+        }
+        // Same convention as the /api, /live and /channel hops (voicebox-beads-efc6, voicebox-beads-pdr6): the
+        // browser's original Origin is preserved as evidence for the scoped CSRF refusal, overwritten here so a
+        // client-supplied copy cannot be used, and the Origin ITSELF is forwarded only for this front.
+        if (typeof req.headers.origin === "string") headers["x-voicebox-proxied-origin"] = req.headers.origin;
+        forwardDevFrontOrigin({ setHeader: (name, value) => { headers[name] = value; } }, req);
         const upstream = request(
           `${API_TARGET}${req.url}`,
-          { method: req.method, headers: { cookie: req.headers.cookie ?? "" } },
+          { method: req.method, headers },
           (up) => {
             res.writeHead(up.statusCode ?? 502, up.headers);
             up.pipe(res);
