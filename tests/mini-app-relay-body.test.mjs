@@ -139,22 +139,52 @@ test("a text body is bounded in UTF-8 bytes, not in UTF-16 units (voicebox-beads
   assert.equal(relayBody("é".repeat(32769), { maxBytes: 65536 }).ok, false, "one code point past the bound is refused");
 });
 
-test("a FormData body counts the FIELD NAMES too (voicebox-beads-r5wq)", () => {
-  const name = "k".repeat(20);
-  const form = new FormData();
-  // Values alone are 65,530 bytes: under the bound. With the field name they are 65,550: over it.
-  form.append(name, "v".repeat(65530));
-  const refused = relayBody(form, { maxBytes: 65536 });
-  assert.equal(refused.ok, false, "the field name is bytes the host reads, so it is part of the bound");
-  assert.match(refused.error, /65550 bytes across its field names and values/);
-  // The same body under a name that fits stays accepted, and the envelope still round-trips.
+test("a FormData is measured as the MULTIPART it becomes, framing and filenames included (voicebox-beads-wnrl)", async () => {
+  // The reviewer's repro (voicebox-beads-wnrl): 65,530 bytes of value with a one-byte field name summed to 65,531 —
+  // inside a 65,536 bound — and went on the wire as 65,650 bytes. Summing names and values is not the size of the
+  // request that leaves, so the accounting now includes the multipart framing, a Blob's filename and its content-type.
+  const wireBytes = async (form) => (await new Request("https://example.test", { method: "POST", body: form }).arrayBuffer()).byteLength;
+
+  const reviewerRepro = new FormData();
+  reviewerRepro.append("k", "v".repeat(65530));
+  const refused = relayBody(reviewerRepro, { maxBytes: 65536 });
+  assert.equal(refused.ok, false, "the reviewer's repro must be refused: it serialises to 65,650 bytes");
+  assert.match(refused.error, /as multipart \(framing, field names, a Blob's filename and its content-type included\)/);
+
+  // A long FILENAME is bytes too, and it is the reviewer's second repro: names and values were small, the wire was not.
+  const longName = new FormData();
+  longName.append("f", new Blob(["hi"], { type: "text/plain" }), "x".repeat(70000));
+  assert.equal(relayBody(longName, { maxBytes: 65536 }).ok, false, "a 70,000-character filename must be counted");
+
+  // Field names still count (voicebox-beads-r5wq), and the small positive control still round-trips.
   const fits = new FormData();
-  fits.append("k", "v".repeat(65530));
+  fits.append("a", "b");
   const accepted = relayBody(fits, { maxBytes: 65536 });
-  assert.equal(accepted.ok, true, "65,531 bytes is inside the bound");
+  assert.equal(accepted.ok, true);
   const rebuilt = relayBody(accepted.body, { maxBytes: 65536 });
   assert.equal(rebuilt.ok, true);
-  assert.equal(rebuilt.body.get("k").length, 65530);
+  assert.equal(rebuilt.body.get("a"), "b");
+
+  // THE PROPERTY THAT MATTERS: if the relay accepts a form, the request it becomes never exceeds the bound. Driven
+  // over shapes that sit on both sides of the edge, measured against the real serialiser rather than against my
+  // arithmetic — an upper bound that is WRONG in the loose direction is the whole finding.
+  for (const [what, build] of [
+    ["a value at the edge", (f) => f.append("k", "v".repeat(65000))],
+    ["a value just past it", (f) => f.append("k", "v".repeat(65400))],
+    ["many small parts", (f) => { for (let i = 0; i < 200; i++) f.append(`field_${i}`, "x".repeat(300)); }],
+    ["one blob with a name", (f) => f.append("upload", new Blob([new Uint8Array(60000)], { type: "application/octet-stream" }), "notes.bin")],
+    ["a tiny form", (f) => f.append("a", "b")],
+  ]) {
+    const form = new FormData();
+    build(form);
+    const verdict = relayBody(form, { maxBytes: 65536 });
+    const size = await wireBytes(verdict.ok ? relayBody(verdict.body, { maxBytes: 65536 }).body : form);
+    if (verdict.ok) {
+      assert.ok(size <= 65536, `${what}: the relay accepted a form that serialises to ${size} bytes`);
+    } else {
+      assert.ok(size > 65536 - 512, `${what}: refused at ${size} wire bytes, which is not near the bound (${verdict.error})`);
+    }
+  }
 });
 
 test("a percent-encoded form body is measured in bytes too, and was already safe by its encoding (voicebox-beads-r5wq)", () => {

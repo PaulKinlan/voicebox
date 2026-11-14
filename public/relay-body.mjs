@@ -44,6 +44,30 @@ export function relayBody(body, limits) {
   // nearly 2x the stated bound, and up to 3x for CJK and other 3-byte scripts. This stays ES5-shaped and
   // closure-free because the frame's SDK embeds String(relayBody) and a reference to TextEncoder would not exist
   // in that realm; it computes the UTF-8 length of each code point directly, surrogate pairs included.
+  // THE BOUND IS ON THE REQUEST THAT LEAVES, SO THE FRAMING COUNTS TOO (voicebox-beads-wnrl). Summing field names
+  // and values still UNDER-measured a FormData: the browser wraps each part in a boundary, a
+  // `Content-Disposition: form-data; name="…"` header and CRLFs, adds `; filename="…"` and a Content-Type for a
+  // Blob, and closes with a boundary of its own. A 65,530-byte value with a one-byte name passed both halves and
+  // went on the wire as 65,650 bytes. These allowances are deliberately UPPER bounds rather than a formula tied to
+  // one browser's header order, and tests/mini-app-relay-body.test.mjs proves the property: a body the relay
+  // accepts never serialises to more than the bound.
+  var FORM_PART_FRAMING = 128;      // boundary, CRLF, the Content-Disposition header and its blank line
+  var FORM_FILE_FRAMING = 112;      // "; filename=\"…\"" and the Content-Type line a Blob part carries
+  var FORM_BOUNDARY_ALLOWANCE = 256; // the closing boundary, plus headroom for a longer generated one
+  // One part's contribution to the serialised multipart: its framing, its name, and its payload (a Blob's filename
+  // and content-type are bytes on the wire too).
+  function formPartBytes(key, value) {
+    var total = FORM_PART_FRAMING + utf8Bytes(String(key));
+    if (typeof value === "string") return total + utf8Bytes(value);
+    if (value && typeof value.size === "number") {
+      total += FORM_FILE_FRAMING + value.size;
+      if (typeof value.name === "string") total += utf8Bytes(value.name);
+      if (typeof value.type === "string") total += utf8Bytes(value.type);
+      return total;
+    }
+    return total;
+  }
+
   function utf8Bytes(text) {
     var total = 0;
     for (var i = 0; i < text.length; i++) {
@@ -85,18 +109,14 @@ export function relayBody(body, limits) {
     return { ok: true, body: body };
   }
   if (tag === "[object FormData]") {
-    var total = 0;
+    var total = FORM_BOUNDARY_ALLOWANCE;
     var entries = [];
     body.forEach(function (value, key) {
       // FormData values are only ever string or Blob; both structured-clone across the port.
-      // The FIELD NAME is bytes the host will read too (voicebox-beads-r5wq): the envelope carries it and the
-      // multipart part carries it, so it is part of what this bound is bounding.
-      total += utf8Bytes(String(key));
-      if (typeof value === "string") total += utf8Bytes(value);
-      else if (value && typeof value.size === "number") total += value.size;
+      total += formPartBytes(key, value);
       entries.push([String(key), value]);
     });
-    if (total > maxBytes) return { ok: false, error: "a form body of " + total + " bytes across its field names and values exceeds the relay's " + maxBytes + " byte bound" };
+    if (total > maxBytes) return { ok: false, error: "a form body of " + total + " bytes as multipart (framing, field names, a Blob's filename and its content-type included) exceeds the relay's " + maxBytes + " byte bound" };
     // The ENVELOPE crosses the port, not the FormData (voicebox-beads-ctmt): postMessage(structured clone)
     // throws DataCloneError on a FormData in Chrome, so the frame's whole request died AFTER this function
     // had accepted it. The entries list clones cleanly; the bridge-side copy of this function rebuilds the
@@ -109,19 +129,17 @@ export function relayBody(body, limits) {
   // it could not send as a real FormData anyway.
   if (tag === "[object Object]" && body && Array.isArray(body.voiceboxRelayFormData)) {
     var rebuilt = new FormData();
-    var rebuiltTotal = 0;
+    var rebuiltTotal = FORM_BOUNDARY_ALLOWANCE;
     var parts = body.voiceboxRelayFormData;
     for (var i = 0; i < parts.length; i++) {
       var entry = parts[i];
       if (!entry || entry.length !== 2) return { ok: false, error: "a malformed form envelope cannot be relayed" };
       var part = entry[1];
-      rebuiltTotal += utf8Bytes(String(entry[0]));
-      if (typeof part === "string") rebuiltTotal += utf8Bytes(part);
-      else if (part && typeof part.size === "number") rebuiltTotal += part.size;
-      else return { ok: false, error: "a form envelope entry must be a string or a Blob" };
+      if (typeof part !== "string" && !(part && typeof part.size === "number")) return { ok: false, error: "a form envelope entry must be a string or a Blob" };
+      rebuiltTotal += formPartBytes(entry[0], part);
       rebuilt.append(String(entry[0]), part);
     }
-    if (rebuiltTotal > maxBytes) return { ok: false, error: "a form body of " + rebuiltTotal + " bytes across its field names and values exceeds the relay's " + maxBytes + " byte bound" };
+    if (rebuiltTotal > maxBytes) return { ok: false, error: "a form body of " + rebuiltTotal + " bytes as multipart (framing, field names, a Blob's filename and its content-type included) exceeds the relay's " + maxBytes + " byte bound" };
     return { ok: true, body: rebuilt };
   }
   if (tag === "[object ReadableStream]") {
