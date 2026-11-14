@@ -1,7 +1,7 @@
 // tests/tool-index.test.mjs — Unified Tool & Capability Index + Voice-First Self-Editing & Exec
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -126,6 +126,53 @@ test("runSystemCommand executes non-interactively inside rootPath and enforces c
   } finally {
     rmSync(scratch, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("runSystemCommand timeout kills the shell's background descendants", async () => {
+  const scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "vb-tool-timeout-")));
+  const marker = path.join(scratch, "survived");
+  const script = path.join(scratch, "grandchild.cjs");
+  let descendantPid;
+  try {
+    writeFileSync(script, `setTimeout(() => require('fs').writeFileSync(${JSON.stringify(marker)}, 'alive'), 600);\n`);
+    const result = await runSystemCommand(scratch, {
+      command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)} & echo $!; wait`,
+      timeoutMs: 200,
+    });
+    descendantPid = Number(result.stdout.trim());
+    assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0, JSON.stringify(result));
+    assert.equal(result.refused, "command-timeout", JSON.stringify(result));
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    assert.equal(existsSync(marker), false, "a background child must not survive the shell timeout");
+  } finally {
+    if (descendantPid) {
+      try { process.kill(descendantPid, "SIGKILL"); } catch { /* already exited */ }
+    }
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("runSystemCommand answers at the deadline even if a descendant escapes the process group", async () => {
+  const scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "vb-tool-escaped-")));
+  let escapedPid;
+  try {
+    // setsid moves the child to another group; it still inherits the command's pipes.
+    const started = Date.now();
+    const result = await runSystemCommand(scratch, {
+      command: `setsid ${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 10000)" & echo $!; wait`,
+      timeoutMs: 300,
+    });
+    const elapsed = Date.now() - started;
+    escapedPid = Number(result.stdout.trim());
+    assert.ok(Number.isSafeInteger(escapedPid) && escapedPid > 0, JSON.stringify(result));
+    assert.equal(result.refused, "command-timeout", JSON.stringify(result));
+    assert.ok(elapsed < 2000, `a descendant held the pipes open for ${elapsed}ms`);
+  } finally {
+    if (escapedPid) {
+      try { process.kill(escapedPid, "SIGKILL"); } catch { /* already exited */ }
+    }
+    rmSync(scratch, { recursive: true, force: true });
   }
 });
 
