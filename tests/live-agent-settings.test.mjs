@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { startServer } from "./lib/server.mjs";
+import { authenticateLiveRoom } from "./lib/live-room-token.mjs";
 
 const HAVE_KEY = Boolean(process.env.GEMINI_API_KEY);
 const SCRATCH = mkdtempSync(path.join(os.tmpdir(), "voicebox-settings-"));
@@ -42,6 +43,7 @@ test("a chosen voice and personality are CARRIED into the live session that star
       if (m.type === "tool") tools.push(m);
     };
     await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
+    await authenticateLiveRoom(server.base, ws);
     for (let i = 0; i < 100 && !states.some((s) => s.state === "ready"); i++) await sleep(200);
     assert(states.some((s) => s.state === "ready"), "the session never became ready — the vendor rejected the carried settings");
 

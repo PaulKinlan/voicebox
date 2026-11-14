@@ -16,6 +16,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync
 import path from "node:path";
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { authenticateLiveRoom } from "./lib/live-room-token.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const HAVE_KEY = Boolean(process.env.GEMINI_API_KEY);
@@ -45,7 +46,7 @@ mkdirSync(WORKSPACE, { recursive: true });
 function startServer(port, env = {}) {
   const proc = spawn("node", ["server.mjs"], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port), VOICEBOX_RESOLVER: "script", ...env },
+    env: { ...process.env, PORT: String(port), VOICEBOX_RESOLVER: "script", ...env, VOICEBOX_LOOPBACK_AUTH: "0" }, // raw test socket; no bootstrap cookie
     stdio: ["ignore", "pipe", "pipe"],
   });
   return proc;
@@ -78,6 +79,7 @@ async function liveSocket(port) {
     }
   };
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
+  await authenticateLiveRoom(`http://127.0.0.1:${port}`, ws);
   // Wait for the readiness gate to open.
   for (let i = 0; i < 100; i++) {
     if (states.some((s) => s.state === "ready")) break;

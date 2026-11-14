@@ -343,6 +343,12 @@ async function startLive() {
     const timer = setTimeout(() => reject(new Error("machine-timeout (no response to the /live upgrade within 15s)")), 15000);
     socket.onopen = () => {
       clearTimeout(timer);
+      // Authenticate shell tool calls separately from the Origin-based voice connection.
+      // Send the room token as a frame, never in the URL (where it could enter logs).
+      const roomToken = document.querySelector('meta[name="voicebox-session-token"]')?.content;
+      if (roomToken && roomToken !== "__VOICEBOX_SESSION_TOKEN__") {
+        socket.send(JSON.stringify({ type: "session_auth", sessionToken: roomToken }));
+      }
       // THE FOLDER THE VOICE IS WORKING IN (voicebox-beads-0zi4): the page owns navigation, so it
       // reports; the server answers with a `project-instruction` state naming which file it read and
       // whether it could apply it. Re-registered on every connection, so a reconnect re-reports.

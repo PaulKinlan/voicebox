@@ -5285,6 +5285,21 @@ server.on("upgrade", (req, socket) => {
   // requires the bootstrap-minted session cookie (docs/13 §4), which is what turns the claim into a proof
   // for every local process that cannot read the ticket output.
   const claimsToBeTheLocalPageNow = claimsToBeTheLocalPage(req, ownPageOrigins());
+  // An Origin claim may admit a gate-off voice session, but cannot authorize shell tools.
+  // A paired bearer is set only after the hello gate verifies it; a cookie is meaningful only
+  // behind the loopback bootstrap wall; the room token arrives in an explicit WS message.
+  let roomSessionAuthenticated = false;
+  // These model-facing verbs mutate host files (or execute a command). Other live tools
+  // retain their existing policy; the HTTP turn has a different authority boundary.
+  const LIVE_HOST_MUTATING_VERBS = new Set(["exec", "write", "edit", "delete", "undo"]);
+  const liveExecAuthorized = () => Boolean(ws.bearer) ||
+    (LOOPBACK_AUTH && claimsToBeTheLocalPageNow && sessionCookieOk(req)) || roomSessionAuthenticated;
+  const executeLiveAction = (action) => {
+    if (LIVE_HOST_MUTATING_VERBS.has(action.verb) && !liveExecAuthorized()) {
+      return { ok: false, refused: "room-session-required", why: "changing files or running a command in a live session requires a paired bearer, bootstrap session cookie, or in-room session token; a local Origin header alone is not authority" };
+    }
+    return execute(action);
+  };
 
   const refuseLive = (refused, why) => {
     try { ws.send(JSON.stringify({ type: "refused", refused, why })); } catch { /* the socket may be gone */ }
@@ -5416,7 +5431,7 @@ server.on("upgrade", (req, socket) => {
                 userTranscript: userSpoken,
                 modelTranscript: modelSpoken,
                 toolCallsInTurn: toolCount,
-                executeAction: execute,
+                executeAction: executeLiveAction,
               }).then((recovery) => {
                 if (recovery?.recovered && recovery.calls?.length) {
                   trace?.({
@@ -5487,7 +5502,7 @@ server.on("upgrade", (req, socket) => {
               result = { ok: false, refused: action.refused, error: `refused: ${action.refused}`, why: action.why };
             } else {
               try {
-                result = await execute({ ...action, turn: "live" });
+                result = await executeLiveAction({ ...action, turn: "live" });
               } catch (e) {
                 result = {
                   ok: false,
@@ -5586,6 +5601,14 @@ server.on("upgrade", (req, socket) => {
       if (typeof data === "string") {
         let msg = null;
         try { msg = JSON.parse(data); } catch { /* not JSON — ignore */ }
+        if (msg?.type === "session_auth") {
+          // The browser cannot set upgrade headers. This frame proves the room token without
+          // placing it in the WebSocket URL, logs, model prompt, or a provider message.
+          const admitted = hasExplicitRoomAuthority({ headers: { "x-voicebox-session-token": msg.sessionToken } });
+          if (admitted) roomSessionAuthenticated = true;
+          ws.send(JSON.stringify({ type: "session_auth", ok: admitted }));
+          return;
+        }
         if (msg?.type === "mini_app_result" && typeof msg.callId === "string") {
           const pending = pendingLiveMiniAppCalls.get(msg.callId);
           if (pending) {
