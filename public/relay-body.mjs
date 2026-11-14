@@ -39,13 +39,38 @@ export function relayBody(body, limits) {
   if (body === undefined || body === null) return { ok: true };
   var tag = Object.prototype.toString.call(body);
 
+  // THE BOUND IS IN BYTES, SO IT HAS TO BE MEASURED IN BYTES (voicebox-beads-r5wq). `str.length` counts UTF-16
+  // code units, so a body of 30,000 emoji measured 60,000 and was accepted while its UTF-8 length was 120,000 —
+  // nearly 2x the stated bound, and up to 3x for CJK and other 3-byte scripts. This stays ES5-shaped and
+  // closure-free because the frame's SDK embeds String(relayBody) and a reference to TextEncoder would not exist
+  // in that realm; it computes the UTF-8 length of each code point directly, surrogate pairs included.
+  function utf8Bytes(text) {
+    var total = 0;
+    for (var i = 0; i < text.length; i++) {
+      var code = text.charCodeAt(i);
+      if (code < 0x80) total += 1;
+      else if (code < 0x800) total += 2;
+      else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+        var next = text.charCodeAt(i + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) { total += 4; i++; }
+        else total += 3;
+      } else total += 3;
+    }
+    return total;
+  }
+
   if (typeof body === "string") {
-    if (body.length > maxBytes) return { ok: false, error: "a " + body.length + " character body exceeds the relay's " + maxBytes + " byte bound" };
+    var textBytes = utf8Bytes(body);
+    if (textBytes > maxBytes) return { ok: false, error: "a " + textBytes + " byte body exceeds the relay's " + maxBytes + " byte bound" };
     return { ok: true, body: body };
   }
   if (tag === "[object URLSearchParams]") {
     var encoded = body.toString();
-    if (encoded.length > maxBytes) return { ok: false, error: "a " + encoded.length + " character encoded body exceeds the relay's " + maxBytes + " byte bound" };
+    // Percent-encoding happens to bound this path already: every non-ASCII byte becomes %XX, so the encoded
+    // string's UTF-8 length is never SMALLER than the original's. Measured rather than assumed, because that is
+    // an accident of the encoding and the next person should not have to rediscover it.
+    var encodedBytes = utf8Bytes(encoded);
+    if (encodedBytes > maxBytes) return { ok: false, error: "a " + encodedBytes + " byte encoded body exceeds the relay's " + maxBytes + " byte bound" };
     // The form encoding IS the content-type this body implies; fetch would set the same one natively.
     return { ok: true, body: encoded, contentType: "application/x-www-form-urlencoded;charset=UTF-8" };
   }
@@ -64,11 +89,14 @@ export function relayBody(body, limits) {
     var entries = [];
     body.forEach(function (value, key) {
       // FormData values are only ever string or Blob; both structured-clone across the port.
-      if (typeof value === "string") total += value.length;
+      // The FIELD NAME is bytes the host will read too (voicebox-beads-r5wq): the envelope carries it and the
+      // multipart part carries it, so it is part of what this bound is bounding.
+      total += utf8Bytes(String(key));
+      if (typeof value === "string") total += utf8Bytes(value);
       else if (value && typeof value.size === "number") total += value.size;
       entries.push([String(key), value]);
     });
-    if (total > maxBytes) return { ok: false, error: "a form body of about " + total + " bytes exceeds the relay's " + maxBytes + " byte bound" };
+    if (total > maxBytes) return { ok: false, error: "a form body of " + total + " bytes across its field names and values exceeds the relay's " + maxBytes + " byte bound" };
     // The ENVELOPE crosses the port, not the FormData (voicebox-beads-ctmt): postMessage(structured clone)
     // throws DataCloneError on a FormData in Chrome, so the frame's whole request died AFTER this function
     // had accepted it. The entries list clones cleanly; the bridge-side copy of this function rebuilds the
@@ -87,12 +115,13 @@ export function relayBody(body, limits) {
       var entry = parts[i];
       if (!entry || entry.length !== 2) return { ok: false, error: "a malformed form envelope cannot be relayed" };
       var part = entry[1];
-      if (typeof part === "string") rebuiltTotal += part.length;
+      rebuiltTotal += utf8Bytes(String(entry[0]));
+      if (typeof part === "string") rebuiltTotal += utf8Bytes(part);
       else if (part && typeof part.size === "number") rebuiltTotal += part.size;
       else return { ok: false, error: "a form envelope entry must be a string or a Blob" };
       rebuilt.append(String(entry[0]), part);
     }
-    if (rebuiltTotal > maxBytes) return { ok: false, error: "a form body of about " + rebuiltTotal + " bytes exceeds the relay's " + maxBytes + " byte bound" };
+    if (rebuiltTotal > maxBytes) return { ok: false, error: "a form body of " + rebuiltTotal + " bytes across its field names and values exceeds the relay's " + maxBytes + " byte bound" };
     return { ok: true, body: rebuilt };
   }
   if (tag === "[object ReadableStream]") {

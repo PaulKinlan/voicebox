@@ -112,3 +112,58 @@ test("both halves of the relay are built from this one function", () => {
   );
   assert.doesNotMatch(bridge, /typeof data\.body === "string"/, "the string-only body test is the defect");
 });
+
+// ── the bound is in BYTES, so it must be measured in bytes (voicebox-beads-r5wq) ─────────────────────────────────
+//
+// `str.length` counts UTF-16 code units. The relay's stated bound (BOUNDS.maxArgsBytes = 65,536) is a BYTE budget,
+// and the gap is not academic: 30,000 emoji measured 60,000 units and were ACCEPTED while their UTF-8 length was
+// 120,000 — nearly twice the bound — and a CJK string is 3 bytes per unit, so a body could reach ~192KB.
+test("a text body is bounded in UTF-8 bytes, not in UTF-16 units (voicebox-beads-r5wq)", () => {
+  const emoji = "💡".repeat(30000); // 60,000 UTF-16 units, 120,000 UTF-8 bytes
+  assert.equal(emoji.length, 60000, "the fixture measures what this case is about");
+  const refusedEmoji = relayBody(emoji, { maxBytes: 65536 });
+  assert.equal(refusedEmoji.ok, false, "an astral-plane body over the byte bound must be refused");
+  assert.match(refusedEmoji.error, /120000 byte body exceeds the relay's 65536 byte bound/, "the refusal names BYTES");
+
+  const cjk = "漢".repeat(30000); // 30,000 units, 90,000 bytes
+  assert.equal(cjk.length, 30000);
+  const refusedCjk = relayBody(cjk, { maxBytes: 65536 });
+  assert.equal(refusedCjk.ok, false);
+  assert.match(refusedCjk.error, /90000 byte body/);
+
+  // The positive control: a body that FITS in bytes still passes, and its bytes are not over-counted.
+  const ascii = "x".repeat(65536);
+  assert.equal(relayBody(ascii, { maxBytes: 65536 }).ok, true, "exactly the bound in bytes is accepted");
+  const twoByte = "é".repeat(32768); // 32,768 units, exactly 65,536 bytes
+  assert.equal(relayBody(twoByte, { maxBytes: 65536 }).ok, true, "a 2-byte-per-unit body that exactly fits passes");
+  assert.equal(relayBody("é".repeat(32769), { maxBytes: 65536 }).ok, false, "one code point past the bound is refused");
+});
+
+test("a FormData body counts the FIELD NAMES too (voicebox-beads-r5wq)", () => {
+  const name = "k".repeat(20);
+  const form = new FormData();
+  // Values alone are 65,530 bytes: under the bound. With the field name they are 65,550: over it.
+  form.append(name, "v".repeat(65530));
+  const refused = relayBody(form, { maxBytes: 65536 });
+  assert.equal(refused.ok, false, "the field name is bytes the host reads, so it is part of the bound");
+  assert.match(refused.error, /65550 bytes across its field names and values/);
+  // The same body under a name that fits stays accepted, and the envelope still round-trips.
+  const fits = new FormData();
+  fits.append("k", "v".repeat(65530));
+  const accepted = relayBody(fits, { maxBytes: 65536 });
+  assert.equal(accepted.ok, true, "65,531 bytes is inside the bound");
+  const rebuilt = relayBody(accepted.body, { maxBytes: 65536 });
+  assert.equal(rebuilt.ok, true);
+  assert.equal(rebuilt.body.get("k").length, 65530);
+});
+
+test("a percent-encoded form body is measured in bytes too, and was already safe by its encoding (voicebox-beads-r5wq)", () => {
+  // Percent-encoding turns every non-ASCII byte into %XX, so the encoded string's byte length is never smaller
+  // than the original's. Measured, not assumed: the refusal now names bytes either way.
+  const params = new URLSearchParams();
+  params.set("q", "💡".repeat(20000)); // 80,000 bytes of emoji, percent-encoded to far more
+  const refused = relayBody(params, { maxBytes: 65536 });
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /byte encoded body exceeds the relay's 65536 byte bound/);
+  assert.equal(relayBody("é".repeat(100), { maxBytes: 65536 }).ok, true, "a small encoded body still passes");
+});
