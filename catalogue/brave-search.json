@@ -5,7 +5,7 @@
   "source": "catalogue",
   "runsIn": "host",
   "capabilities": ["network"],
-  "bounds": { "hosts": ["api.search.brave.com"], "maxRequests": 20, "credentials": ["BRAVE_API_KEY"] },
+  "bounds": { "hosts": ["api.search.brave.com"], "maxRequests": 20 },
   "tools": [
     {
       "name": "brave_search",
