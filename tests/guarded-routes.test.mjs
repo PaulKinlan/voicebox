@@ -239,7 +239,7 @@ test("mini-apps: every route's guard is declared, and this is the list", () => {
 });
 
 // ── 5. the agent and permission areas ────────────────────────────────────────────────────────────────
-function agentHarness({ authority = false, hostToken = false, body = {} } = {}) {
+function agentHarness({ authority = false, hostToken = false, roomAuthority = false, body = {} } = {}) {
   const answers = [];
   const calls = [];
   const registry = {
@@ -248,7 +248,7 @@ function agentHarness({ authority = false, hostToken = false, body = {} } = {}) 
     update: (id, b) => { calls.push(["update", id, b]); return id === "a1" ? { ok: true, agent: { id, ...b } } : { ok: false, refused: "agent-not-found" }; },
   };
   const permissions = {
-    pending: () => [{ requestId: "r1" }],
+    pending: () => [{ requestId: "r1", toolCall: { args: { name: "private.txt" } } }],
     resolve: (id, decision) => { calls.push(["resolve", id, decision]); return id === "r1" ? { ok: true } : { ok: false, refused: "unknown-request" }; },
   };
   const json = (_res, code, payload) => { answers.push({ code, body: payload }); };
@@ -260,7 +260,7 @@ function agentHarness({ authority = false, hostToken = false, body = {} } = {}) 
   const permissionRoutes = createPermissionRoutes({ permissions, json });
   const dispatch = createGuardedDispatcher({
     routes: [...agentRoutes, ...permissionRoutes],
-    checks: { browserMutationRefused: () => false, hostTokenOk: () => hostToken, hasAuthority: () => authority, hasRoomAuthority: () => false },
+    checks: { browserMutationRefused: () => false, hostTokenOk: () => hostToken, hasAuthority: () => authority, hasRoomAuthority: () => roomAuthority || hostToken },
     json, readJsonBody: async () => body,
   });
   return { agentRoutes, permissionRoutes, answers, calls, call: (method, pathname) => dispatch({ method }, {}, { pathname }) };
@@ -273,7 +273,7 @@ test("agents + permissions: every route's guard is declared, and this is the lis
     [
       ["POST /api/agents", "authority", "json", "host-token-required"],
       ["PATCH /api/agents/:id", "authority", "json", "host-token-required"],
-      ["GET /api/permissions/pending", "read", null, null],
+      ["GET /api/permissions/pending", "room-authority", null, "room-session-required"],
       ["POST /api/permissions/resolve", "host-token", "json", "host-token-required"],
     ],
   );
@@ -311,14 +311,24 @@ test("agents: registering reports the harness state, a name-only PATCH renames, 
   assert.equal(bad.answers[0].code, 400);
 });
 
-test("permissions: anyone behind the wall reads the queue, only the host token answers it", async () => {
+test("permissions: explicit room or host token reads pending arguments; only host token answers", async () => {
   const page = agentHarness({ authority: true, body: { requestId: "r1", allow: true } });
   await page.call("GET", "/api/permissions/pending");
   await page.call("POST", "/api/permissions/resolve");
-  assert.deepEqual(page.answers.map((a) => a.code), [200, 403], "page authority is not the host token");
+  assert.deepEqual(page.answers.map((a) => [a.code, a.body.refused]), [[403, "room-session-required"], [403, "host-token-required"]], "bare page authority cannot disclose arguments or resolve requests");
+  assert.equal(Object.hasOwn(page.answers[0].body, "pending"), false);
   assert.deepEqual(page.calls, []);
 
+  const room = agentHarness({ roomAuthority: true, body: { requestId: "r1", allow: true } });
+  await room.call("GET", "/api/permissions/pending");
+  await room.call("POST", "/api/permissions/resolve");
+  assert.deepEqual(room.answers.map((a) => [a.code, a.body.refused]), [[200, undefined], [403, "host-token-required"]]);
+  assert.deepEqual(room.answers[0].body.pending, [{ requestId: "r1", toolCall: { args: { name: "private.txt" } } }]);
+
   const host = agentHarness({ hostToken: true, body: { requestId: "r1", allow: 1, reason: 7 } });
+  await host.call("GET", "/api/permissions/pending");
+  assert.equal(host.answers[0].code, 200);
+  assert.equal(host.answers[0].body.pending[0].toolCall.args.name, "private.txt");
   await host.call("POST", "/api/permissions/resolve");
   assert.deepEqual(host.calls, [["resolve", "r1", { allow: true, optionId: undefined, reason: undefined }]]);
   assert.equal(host.answers[0].code, 200);
